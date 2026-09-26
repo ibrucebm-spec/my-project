@@ -12,14 +12,14 @@
 //| http://127.0.0.1:3000                                            |
 //+------------------------------------------------------------------+
 #property copyright "Gold Copy Radar"
-#property version   "1.00"
-#property strict
+#property version   "1.10"
 
 input string ServerUrl      = "http://127.0.0.1:3000/api/ingest"; // Adres endpointu
 input string IngestToken    = "";            // INGEST_TOKEN z pliku .env
 input string TraderName     = "";            // Nazwa (np. nazwa sygnału); puste = login konta
 input int    IntervalSec    = 2;             // Co ile sekund wysyłać
-// Statystyki tradera przepisane ze strony sygnału (MQL5 / Myfxbook):
+// Statystyki tradera przepisane ze strony sygnału (MQL5 / Myfxbook).
+// Zostaw 0, jeśli nie znasz wartości: pole nie zostanie wysłane zamiast fałszywego zera.
 input double SignalGrowthPct   = 0;          // Wzrost % (Growth)
 input double SignalMaxDDPct    = 0;          // Maksymalny drawdown %
 input int    SignalAgeWeeks    = 0;          // Wiek sygnału w tygodniach
@@ -42,10 +42,25 @@ string JsonEscape(const string s)
 
 string Num(const double v, const int digits) { return DoubleToString(v, digits); }
 
+// Broker server time -> UTC offset in seconds, rounded to 15 minutes.
+long ServerUtcOffset()
+{
+   return (long)MathRound((double)(TimeTradeServer() - TimeGMT()) / 900.0) * 900;
+}
+
+string AccountTypeName()
+{
+   long mode = AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   if(mode == ACCOUNT_TRADE_MODE_REAL) return "real";
+   if(mode == ACCOUNT_TRADE_MODE_DEMO) return "demo";
+   return "contest";
+}
+
 string BuildPayload(double &goldPrice)
 {
    string positions = "";
    goldPrice = 0;
+   long utcOffset = ServerUtcOffset();
    int total = PositionsTotal();
    for(int i = 0; i < total; i++)
    {
@@ -57,7 +72,6 @@ string BuildPayload(double &goldPrice)
       int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
       long type  = PositionGetInteger(POSITION_TYPE);
       double cur = PositionGetDouble(POSITION_PRICE_CURRENT);
-      if(goldPrice == 0) goldPrice = SymbolInfoDouble(sym, SYMBOL_BID);
 
       string p = StringFormat(
          "{\"id\":\"%I64u\",\"symbol\":\"%s\",\"side\":\"%s\",\"lots\":%s,\"openPrice\":%s,"
@@ -65,7 +79,7 @@ string BuildPayload(double &goldPrice)
          ticket, JsonEscape(sym), type == POSITION_TYPE_BUY ? "buy" : "sell",
          Num(PositionGetDouble(POSITION_VOLUME), 2),
          Num(PositionGetDouble(POSITION_PRICE_OPEN), digits),
-         (long)PositionGetInteger(POSITION_TIME),
+         (long)PositionGetInteger(POSITION_TIME) - utcOffset,
          Num(PositionGetDouble(POSITION_SL), digits),
          Num(PositionGetDouble(POSITION_TP), digits),
          Num(cur, digits),
@@ -74,16 +88,22 @@ string BuildPayload(double &goldPrice)
       positions += p;
    }
 
+   // Live gold price from the chart symbol (attach the EA to an XAUUSD/GOLD chart).
+   if(IsGold(_Symbol)) goldPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
    string name = TraderName != "" ? TraderName : IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
-   string stats = StringFormat(
-      "{\"growthPct\":%s,\"maxDrawdownPct\":%s,\"ageWeeks\":%d,\"balance\":%s,\"equity\":%s%s}",
-      Num(SignalGrowthPct, 2), Num(SignalMaxDDPct, 2), SignalAgeWeeks,
-      Num(AccountInfoDouble(ACCOUNT_BALANCE), 2), Num(AccountInfoDouble(ACCOUNT_EQUITY), 2),
-      SignalProfitFactor > 0 ? ",\"profitFactor\":" + Num(SignalProfitFactor, 2) : "");
+   // Unknown stats are left out rather than sent as a misleading 0.
+   string stats = StringFormat("{\"balance\":%s,\"equity\":%s",
+      Num(AccountInfoDouble(ACCOUNT_BALANCE), 2), Num(AccountInfoDouble(ACCOUNT_EQUITY), 2));
+   if(SignalGrowthPct != 0)   stats += ",\"growthPct\":" + Num(SignalGrowthPct, 2);
+   if(SignalMaxDDPct > 0)     stats += ",\"maxDrawdownPct\":" + Num(SignalMaxDDPct, 2);
+   if(SignalAgeWeeks > 0)     stats += ",\"ageWeeks\":" + IntegerToString(SignalAgeWeeks);
+   if(SignalProfitFactor > 0) stats += ",\"profitFactor\":" + Num(SignalProfitFactor, 2);
+   stats += "}";
 
    return StringFormat(
-      "{\"account\":{\"id\":\"%I64d\",\"name\":\"%s\",\"stats\":%s},\"price\":%s,\"positions\":[%s]}",
-      AccountInfoInteger(ACCOUNT_LOGIN), JsonEscape(name), stats, Num(goldPrice, 2), positions);
+      "{\"account\":{\"id\":\"%I64d\",\"name\":\"%s\",\"type\":\"%s\",\"stats\":%s},\"price\":%s,\"positions\":[%s]}",
+      AccountInfoInteger(ACCOUNT_LOGIN), JsonEscape(name), AccountTypeName(), stats, Num(goldPrice, 2), positions);
 }
 
 void Send()
@@ -111,6 +131,8 @@ int OnInit()
       Print("GoldCopyRadar: ustaw IngestToken");
       return INIT_PARAMETERS_INCORRECT;
    }
+   if(!IsGold(_Symbol))
+      Print("GoldCopyRadar: uruchom EA na wykresie XAUUSD/GOLD, żeby wysyłać też cenę złota");
    EventSetTimer(MathMax(1, IntervalSec));
    Send();
    return INIT_SUCCEEDED;

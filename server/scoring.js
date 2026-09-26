@@ -78,7 +78,9 @@ function scoreTrader(trader, filters) {
 
   const age = s.ageWeeks || 0;
   const dd = s.maxDrawdownPct;
-  const annualizedPct = annualizedGrowthPct(s.growthPct, age);
+  // Only annualize with at least a year of history; extrapolating a few good
+  // months to a full year produces absurd, misleading numbers.
+  const annualizedPct = age >= 52 ? annualizedGrowthPct(s.growthPct, age) : null;
   const risk = detectRiskPatterns(positions);
   // Patterns seen earlier stay flagged after the basket is closed.
   const memory = trader.riskMemory || {};
@@ -101,7 +103,8 @@ function scoreTrader(trader, filters) {
   }
 
   // Return relative to risk (Calmar-like): 5x annual return / max DD = full marks.
-  const calmar = annualizedPct / Math.max(1, dd || 100);
+  // Younger accounts use their raw growth, never an extrapolated one.
+  const calmar = (annualizedPct ?? (s.growthPct || 0)) / Math.max(1, dd || 100);
   const returnPts = clamp(calmar * 10, 0, 50);
   const agePts = clamp((age / 104) * 20, 0, 20);
   const pf = s.profitFactor;
@@ -121,7 +124,7 @@ function scoreTrader(trader, filters) {
     qualifies: reasons.length === 0,
     reasons,
     risk,
-    annualizedPct: Math.round(annualizedPct * 10) / 10,
+    annualizedPct: annualizedPct === null ? null : Math.round(annualizedPct * 10) / 10,
     slSharePct: typeof slSharePct === 'number' ? Math.round(slSharePct) : null,
   };
 }

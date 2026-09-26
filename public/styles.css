@@ -40,6 +40,8 @@ h2 { margin: 0 0 12px; font-size: 15px; display: flex; align-items: center; gap:
 .price-box .label { color: var(--muted); font-size: 12px; }
 .price { font-size: 26px; font-weight: 700; color: var(--gold); transition: color .3s; }
 .price.up { color: var(--up); } .price.down { color: var(--down); }
+.price.stale { color: var(--muted); text-decoration: line-through; }
+.price-note { font-size: 11px; color: var(--warn); min-height: 14px; }
 .status { display: flex; align-items: center; gap: 6px; color: var(--muted); }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); }
 .dot.ok { background: var(--up); } .dot.err { background: var(--down); }
@@ -56,6 +58,8 @@ button:hover { border-color: var(--gold); }
   background: color-mix(in srgb, var(--warn) 15%, transparent); border: 1px solid var(--warn);
 }
 
+.banner.danger { background: color-mix(in srgb, var(--down) 12%, transparent); border-color: var(--down); }
+
 .grid {
   display: grid; gap: 16px; padding: 0 20px 20px;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
@@ -63,7 +67,9 @@ button:hover { border-color: var(--gold); }
 }
 .positions { grid-area: positions; } .ranking { grid-area: ranking; } .feed { grid-area: feed; }
 @media (max-width: 900px) {
-  .grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "positions" "ranking" "feed"; padding: 0 16px 16px; }
+  .banner.danger { background: color-mix(in srgb, var(--down) 12%, transparent); border-color: var(--down); }
+
+.grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "positions" "ranking" "feed"; padding: 0 16px 16px; }
   .top, .controls { padding-left: 16px; padding-right: 16px; }
 }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
@@ -79,6 +85,13 @@ tr.new { animation: flash 2s ease-out; }
 .pos { color: var(--up); } .neg { color: var(--down); }
 .src { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
 .nosl { color: var(--warn); }
+.stale-row { opacity: .5; }
+.badge { font-size: 11px; border-radius: 4px; padding: 0 5px; margin-left: 6px; }
+.badge.warn { background: var(--warn); color: #1b1300; }
+.badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.badges .src { margin-left: 0; }
+.note { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.note.warn { color: var(--warn); }
 .empty { color: var(--muted); text-align: center; padding: 20px 0; margin: 0; }
 
 #ranking { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }

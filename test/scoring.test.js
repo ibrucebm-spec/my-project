@@ -86,3 +86,46 @@ test('gold market hours', () => {
   assert.ok(isGoldMarketOpen(new Date('2026-09-29T10:00:00Z')), 'tuesday');
   assert.ok(!isGoldMarketOpen(new Date('2026-09-29T21:15:00Z')), 'daily break');
 });
+
+test('growth is not extrapolated to a year for young accounts', () => {
+  const young = scoreTrader({ stats: { growthPct: 100, maxDrawdownPct: 10, ageWeeks: 30 }, positions: [] }, filters);
+  assert.strictEqual(young.annualizedPct, null);
+  const old = scoreTrader({ stats: { growthPct: 100, maxDrawdownPct: 10, ageWeeks: 104 }, positions: [] }, filters);
+  assert.ok(Math.abs(old.annualizedPct - 41.4) < 0.1, String(old.annualizedPct));
+});
+
+test('traders go stale when their source stops sending', () => {
+  const { Store } = require('../server/store');
+  const store = new Store(filters, { staleMs: { mt5: 1000 } });
+  const t = store.upsertTrader({ source: 'mt5', id: 1, stats: {}, positions: [] });
+  assert.strictEqual(store.snapshot().traders[0].stale, false);
+  t.lastSeenAt -= 2000;
+  assert.strictEqual(store.snapshot().traders[0].stale, true);
+  assert.strictEqual(store.snapshot().goldPriceStale, true);
+});
+
+test('risk flags survive a restart via the memory file', () => {
+  const os = require('os');
+  const path = require('path');
+  const { Store } = require('../server/store');
+  const file = path.join(os.tmpdir(), `gcr-mem-${process.pid}.json`);
+  const stats = { growthPct: 200, maxDrawdownPct: 10, ageWeeks: 100 };
+  new Store(filters, { memoryFile: file }).upsertTrader({
+    source: 'x', id: 1, stats, positions: [pos(1, 'buy', 0.1, 5100), pos(2, 'buy', 0.2, 5095), pos(3, 'buy', 0.4, 5090)],
+  });
+  const t = new Store(filters, { memoryFile: file }).upsertTrader({ source: 'x', id: 1, stats, positions: [] });
+  require('fs').unlinkSync(file);
+  assert.ok(t.rating.risk.martingale);
+  assert.ok(!t.rating.qualifies);
+});
+
+test('myfxbook trade ids do not depend on list order', () => {
+  const { mapTrade, uniqueIds } = require('../server/sources/myfxbook');
+  const a = { openTime: '09/25/2026 10:00', symbol: 'XAUUSD', action: 'Buy', openPrice: 5100, sizing: { value: '0.5' } };
+  const b = { openTime: '09/25/2026 11:00', symbol: 'XAUUSD', action: 'Sell', openPrice: 5110, sizing: { value: '0.2' } };
+  const first = uniqueIds([a, b].map(mapTrade));
+  const afterAClosed = uniqueIds([b].map(mapTrade));
+  assert.strictEqual(first[1].id, afterAClosed[0].id);
+  const dup = uniqueIds([a, a].map(mapTrade));
+  assert.notStrictEqual(dup[0].id, dup[1].id);
+});

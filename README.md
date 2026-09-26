@@ -36,7 +36,7 @@ Nie istnieje publiczne API, które udostępnia na żywo pozycje „wszystkich na
 1. W MT5 zasubskrybuj wybrane sygnały XAUUSD (może to być konto demo u brokera: transakcje tradera są prawdziwe, ryzykujesz tylko wirtualne pieniądze; jedno konto = jeden sygnał).
 2. Skopiuj `mt5/GoldCopyRadarBridge.mq5` do `MQL5/Experts`, skompiluj w MetaEditorze.
 3. *Narzędzia → Opcje → Doradcy Expert → Zezwalaj na WebRequest* i dodaj adres serwera (np. `http://127.0.0.1:3000`).
-4. Przeciągnij EA na dowolny wykres. Ustaw `IngestToken` i nazwę, a statystyki sygnału (wzrost %, max DD %, wiek w tygodniach, PF) przepisz ze strony sygnału.
+4. Przeciągnij EA na wykres **XAUUSD** (z niego EA bierze cenę złota). Ustaw `IngestToken` i nazwę, a statystyki sygnału (wzrost %, max DD %, wiek w tygodniach, PF) przepisz ze strony sygnału.
 
 Każda pozycja skopiowana z sygnału pojawi się w aplikacji w ciągu sekund. Jeśli serwer stoi w internecie, używaj HTTPS i długiego losowego tokenu.
 
@@ -70,6 +70,17 @@ Trader jest **odrzucany** (i domyślnie ukrywany), gdy:
   "positions": [{ "id": "9001", "symbol": "XAUUSD", "side": "buy", "lots": 0.3, "openPrice": 5118.2, "openTime": 1790000000000, "sl": 5105, "tp": 5140, "profit": 54 }]
 }
 ```
+
+## Wiarygodność danych
+
+- **Nieaktualne dane są oznaczane.** Jeśli EA z MT5 milczy dłużej niż 30 s albo Myfxbook nie odpowiada przez 3 cykle odświeżania, pozycje tego tradera są wyszarzone z etykietą „nieaktualne”, a na górze pojawia się ostrzeżenie. Cena złota bez aktualizacji przez 60 s jest przekreślona.
+- **Przy każdym traderze widać źródło danych** (MT5 na żywo / Myfxbook API), typ konta (REAL / DEMO) i czas ostatniej aktualizacji. Statystyki wpisane ręcznie w EA są wyraźnie opisane.
+- **Brakujące statystyki nie są wysyłane jako 0.** Trader bez danych o drawdownie lub wieku konta jest odrzucany, zamiast dostawać zawyżony wynik.
+- **Zwrot roczny liczony jest tylko dla kont z co najmniej rokiem historii.** Krótsze okresy nie są przeliczane na rok.
+- **Wykryty martingale/grid jest zapamiętywany na dysku** (`data/risk-memory.json`) i pozostaje oznaczony po restarcie.
+- **Godziny rynku:** w weekend i w dziennej przerwie aplikacja pokazuje komunikat „Rynek zamknięty”.
+- **Czas otwarcia pozycji z MT5 jest przeliczany z czasu serwera brokera na UTC.**
+- **Aplikacja jest dostępna tylko na Twoim komputerze** (127.0.0.1). Żeby udostępnić ją w sieci, ustaw `HOST=0.0.0.0`, ale wtedy koniecznie z mocnym `INGEST_TOKEN`.
 
 ## Ograniczenia
 

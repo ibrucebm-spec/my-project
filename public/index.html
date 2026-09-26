@@ -18,8 +18,9 @@
     <div class="price-box">
       <span class="label">XAUUSD</span>
       <span id="price" class="price">–</span>
+      <span id="price-note" class="price-note"></span>
     </div>
-    <div class="status"><span id="conn" class="dot"></span><span id="conn-text">łączenie…</span></div>
+    <div class="status"><span id="conn" class="dot"></span><span id="conn-text">łączenie z serwerem…</span></div>
   </header>
 
   <section class="controls">
@@ -29,6 +30,7 @@
     <span id="filters" class="muted"></span>
   </section>
 
+  <div id="stale-banner" class="banner danger" hidden></div>
   <div id="market-banner" class="banner" hidden>
     Rynek złota jest zamknięty (weekend lub przerwa dzienna). Nowe pozycje pojawią się po otwarciu rynku, zwykle w niedzielę ok. 22:00 UTC (24:00 w Polsce latem).
   </div>

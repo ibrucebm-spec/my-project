@@ -2,18 +2,8 @@
 // vars and prints your accounts plus their open gold positions. Never prints
 // the password or session id.
 require('../server/config');
-const { mapAccount, mapTrade } = require('../server/sources/myfxbook');
+const { call, mapAccount, mapTrade } = require('../server/sources/myfxbook');
 const { isGoldSymbol } = require('../server/scoring');
-
-const BASE = 'https://www.myfxbook.com/api';
-
-async function call(endpoint, params) {
-  const url = `${BASE}/${endpoint}.json?${new URLSearchParams(params)}`;
-  const res = await fetch(url);
-  const body = await res.json().catch(() => ({ error: true, message: `HTTP ${res.status}, odpowiedź nie jest JSON` }));
-  if (body.error) throw new Error(`${endpoint}: ${body.message}`);
-  return body;
-}
 
 (async () => {
   const email = process.env.MYFXBOOK_EMAIL;
@@ -37,7 +27,8 @@ async function call(endpoint, params) {
       const s = mapAccount(a);
       const { openTrades = [] } = await call('get-open-trades', { session, id: a.id });
       const gold = openTrades.map(mapTrade).filter((t) => isGoldSymbol(t.symbol));
-      console.log(`  - ${a.name} (id ${a.id}): zysk ${s.growthPct}%, max DD ${s.maxDrawdownPct}%, wiek ${s.ageWeeks} tyg., ` +
+      const type = a.demo === true || a.demo === 'true' ? 'DEMO' : 'REAL';
+      console.log(`  - ${a.name} (id ${a.id}, ${type}): zysk ${s.growthPct}%, max DD ${s.maxDrawdownPct}%, wiek ${s.ageWeeks} tyg., ` +
         `otwartych ${openTrades.length}, w tym złoto ${gold.length}`);
       for (const t of gold) console.log(`      ${t.side.toUpperCase()} ${t.lots} ${t.symbol} @ ${t.openPrice} SL ${t.sl || 'brak'} TP ${t.tp || '-'}`);
     }
@@ -47,7 +38,7 @@ async function call(endpoint, params) {
   }
 })().catch((err) => {
   console.error(`\nBŁĄD: ${err.message}`);
-  if (/fetch failed|ENOTFOUND|ECONN|nie jest JSON/i.test(err.message)) {
+  if (/fetch failed|ENOTFOUND|ECONN|nie jest JSON|timeout|aborted/i.test(err.message)) {
     console.error('Brak połączenia z myfxbook.com: blokuje je sieć, firewall albo proxy.');
   }
   process.exit(1);
