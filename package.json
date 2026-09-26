@@ -1,7 +1,7 @@
 {
   "name": "gold-copy-radar",
   "version": "0.1.0",
-  "description": "Live monitor of top XAUUSD traders' positions (Myfxbook API, MT5 bridge, demo mode)",
+  "description": "Live monitor of top XAUUSD traders' positions (Myfxbook API, MT5 bridge)",
   "main": "server/index.js",
   "type": "commonjs",
   "engines": {
@@ -9,10 +9,8 @@
   },
   "scripts": {
     "start": "node server/index.js",
-    "demo": "node server/index.js --demo",
     "test": "node --test test/*.test.js",
-    "check:myfxbook": "node scripts/check-myfxbook.js",
-    "test:bridge": "node scripts/send-test-position.js"
+    "check:myfxbook": "node scripts/check-myfxbook.js"
   },
   "license": "MIT"
 }

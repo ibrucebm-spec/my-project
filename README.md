@@ -2,7 +2,7 @@
 
 Aplikacja web, która na żywo pokazuje otwarte pozycje **XAUUSD** wybranych traderów. Ranking przepuszcza tylko tych, którzy mają trwałe wyniki przy kontrolowanym ryzyku.
 
-![Zrzut](docs/screenshot.png)
+Aplikacja pokazuje wyłącznie prawdziwe dane z podłączonych źródeł. Nie ma w niej żadnych symulowanych traderów.
 
 ## Uruchomienie
 
@@ -11,32 +11,29 @@ Wymagany Node.js 18+. Aplikacja nie ma żadnych zależności npm.
 ```bash
 cp .env.example .env      # ustaw INGEST_TOKEN i ewentualnie dane Myfxbook
 npm start                 # http://localhost:3000
-npm run demo              # sam tryb demo (symulowani traderzy)
 npm test
 ```
 
-## Testy połączeń (jedną komendą)
+## Test połączenia z Myfxbook
 
 ```bash
-npm run check:myfxbook    # loguje się do Myfxbook API i wypisuje Twoje konta + otwarte pozycje na złocie
-npm run test:bridge       # przy działającym "npm start": wysyła testową pozycję jak EA z MT5 i zamyka ją po 15 s
+npm run check:myfxbook    # loguje się do Myfxbook API i wypisuje Twoje prawdziwe konta + otwarte pozycje na złocie
 ```
 
-Oba skrypty biorą dane z `.env` i nigdy nie wypisują hasła.
+Skrypt bierze dane z `.env` i nigdy nie wypisuje hasła. Most MT5 testuje się na prawdziwym terminalu: po podłączeniu EA w oknie „Eksperci” w MT5 nie powinno być błędów, a pozycje sygnału pojawią się w aplikacji.
 
 ## Skąd biorą się dane
 
-Nie istnieje publiczne API, które udostępnia na żywo pozycje „wszystkich najlepszych traderów świata”. MQL5, eToro i ZuluTrade nie dają dostępu do cudzych pozycji, a scrapowanie ich stron łamie regulaminy. Dlatego aplikacja ma trzy legalne źródła (`DATA_SOURCES` w `.env`):
+Nie istnieje publiczne API, które udostępnia na żywo pozycje „wszystkich najlepszych traderów świata”. MQL5, eToro i ZuluTrade nie dają dostępu do cudzych pozycji, a scrapowanie ich stron łamie regulaminy. Dlatego aplikacja ma dwa legalne źródła (`DATA_SOURCES` w `.env`):
 
 | Źródło | Co daje | Konfiguracja |
 |---|---|---|
 | `mt5` | Pozycje z Twojego terminala MT5 na żywo (co ~2 s i natychmiast przy każdej transakcji) | EA `mt5/GoldCopyRadarBridge.mq5` + `INGEST_TOKEN` |
 | `myfxbook` | Konta z Twojego portfolio Myfxbook (statystyki + otwarte transakcje), odświeżane co 60 s | `MYFXBOOK_EMAIL`, `MYFXBOOK_PASSWORD` |
-| `demo` | Symulowani traderzy, w tym celowo „martingale” i „grid”, żeby pokazać działanie filtra | nic |
 
 ### Most MT5: jak śledzić sygnały MQL5 na żywo
 
-1. W MT5 zasubskrybuj wybrane sygnały XAUUSD (najlepiej na koncie demo, jedno konto = jeden sygnał).
+1. W MT5 zasubskrybuj wybrane sygnały XAUUSD (może to być konto demo u brokera: transakcje tradera są prawdziwe, ryzykujesz tylko wirtualne pieniądze; jedno konto = jeden sygnał).
 2. Skopiuj `mt5/GoldCopyRadarBridge.mq5` do `MQL5/Experts`, skompiluj w MetaEditorze.
 3. *Narzędzia → Opcje → Doradcy Expert → Zezwalaj na WebRequest* i dodaj adres serwera (np. `http://127.0.0.1:3000`).
 4. Przeciągnij EA na dowolny wykres. Ustaw `IngestToken` i nazwę, a statystyki sygnału (wzrost %, max DD %, wiek w tygodniach, PF) przepisz ze strony sygnału.

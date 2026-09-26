@@ -50,7 +50,7 @@
 
     const f = state.filters;
     $('filters').textContent = `Filtry: konto ≥ ${f.minAgeWeeks} tyg., max DD ≤ ${f.maxDrawdownPct}%, wynik ≥ ${f.minScore}, bez martingale/grid`;
-    $('demo-banner').hidden = !traders.some((t) => t.source === 'demo');
+    $('market-banner').hidden = state.marketOpen !== false;
 
     // Positions
     const rows = [];
@@ -103,7 +103,7 @@
           ${r.reasons.length ? `<div class="reasons">✕ ${r.reasons.map(esc).join(' · ')}</div>` : ''}
         </li>`;
       })
-      .join('') || '<p class="empty">Brak traderów. Skonfiguruj źródło danych.</p>';
+      .join('') || '<p class="empty">Brak podłączonych traderów. Ustaw Myfxbook w pliku .env albo podłącz MT5 (README).</p>';
   }
 
   function addFeed(kind, e) {

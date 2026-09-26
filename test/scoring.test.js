@@ -76,3 +76,13 @@ test('suspiciously high win rate is rejected', () => {
   const r = scoreTrader({ stats: { growthPct: 300, maxDrawdownPct: 10, ageWeeks: 60, winRatePct: 99 }, positions: [] }, filters);
   assert.ok(!r.qualifies);
 });
+
+test('gold market hours', () => {
+  const { isGoldMarketOpen } = require('../server/market');
+  assert.ok(!isGoldMarketOpen(new Date('2026-09-26T12:00:00Z')), 'saturday');
+  assert.ok(!isGoldMarketOpen(new Date('2026-09-25T21:30:00Z')), 'friday evening');
+  assert.ok(!isGoldMarketOpen(new Date('2026-09-27T20:00:00Z')), 'sunday before open');
+  assert.ok(isGoldMarketOpen(new Date('2026-09-27T22:30:00Z')), 'sunday after open');
+  assert.ok(isGoldMarketOpen(new Date('2026-09-29T10:00:00Z')), 'tuesday');
+  assert.ok(!isGoldMarketOpen(new Date('2026-09-29T21:15:00Z')), 'daily break');
+});

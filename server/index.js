@@ -97,7 +97,6 @@ function createApp(cfg = config) {
 
   const stops = [];
   function startSources() {
-    if (cfg.sources.includes('demo')) stops.push(require('./sources/demo').start(store));
     if (cfg.sources.includes('myfxbook')) stops.push(require('./sources/myfxbook').start(store, cfg.myfxbook));
     if (cfg.sources.includes('mt5')) {
       if (!cfg.ingestToken) console.warn('[mt5] INGEST_TOKEN nie ustawiony: most MT5 odrzuci wszystkie dane');

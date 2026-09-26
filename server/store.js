@@ -1,5 +1,6 @@
 const { EventEmitter } = require('events');
 const { isGoldSymbol, scoreTrader } = require('./scoring');
+const { isGoldMarketOpen } = require('./market');
 
 // In-memory state of traders and their open XAUUSD positions.
 // Sources push full snapshots per trader; the store diffs them and emits
@@ -62,6 +63,7 @@ class Store extends EventEmitter {
     );
     return {
       goldPrice: this.goldPrice,
+      marketOpen: isGoldMarketOpen(),
       filters: this.filters,
       traders,
       at: new Date().toISOString(),
