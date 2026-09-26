@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gold Copy Radar</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo">Au</span>
+      <div>
+        <h1>Gold Copy Radar</h1>
+        <p class="sub">Pozycje XAUUSD najlepszych traderów na żywo</p>
+      </div>
+    </div>
+    <div class="price-box">
+      <span class="label">XAUUSD</span>
+      <span id="price" class="price">–</span>
+    </div>
+    <div class="status"><span id="conn" class="dot"></span><span id="conn-text">łączenie…</span></div>
+  </header>
+
+  <section class="controls">
+    <label><input type="checkbox" id="only-qualified" checked> Tylko traderzy przechodzący filtry</label>
+    <label><input type="checkbox" id="sound"> Dźwięk przy nowej pozycji</label>
+    <button id="notify-btn" type="button">Włącz powiadomienia w przeglądarce</button>
+    <span id="filters" class="muted"></span>
+  </section>
+
+  <div id="demo-banner" class="banner" hidden>
+    Tryb DEMO: traderzy oznaczeni <b>demo</b> są symulowani. Podłącz Myfxbook lub most MT5 (README), żeby widzieć prawdziwe pozycje.
+  </div>
+
+  <main class="grid">
+    <section class="card positions">
+      <h2>Otwarte pozycje <span id="pos-count" class="pill">0</span></h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Trader</th><th>Kierunek</th><th>Lot</th><th>Otwarcie</th><th>SL</th><th>TP</th><th>Wynik</th><th>Od</th></tr>
+          </thead>
+          <tbody id="positions"></tbody>
+        </table>
+      </div>
+      <p id="no-positions" class="empty">Brak otwartych pozycji u wybranych traderów.</p>
+    </section>
+
+    <section class="card ranking">
+      <h2>Ranking traderów</h2>
+      <ol id="ranking"></ol>
+    </section>
+
+    <section class="card feed">
+      <h2>Zdarzenia na żywo</h2>
+      <ul id="feed"></ul>
+    </section>
+  </main>
+
+  <footer class="muted">
+    To narzędzie informacyjne, nie porada inwestycyjna. Wyniki historyczne nie gwarantują przyszłych zysków; CFD na złoto niosą wysokie ryzyko utraty kapitału.
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
