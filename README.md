@@ -15,6 +15,15 @@ npm run demo              # sam tryb demo (symulowani traderzy)
 npm test
 ```
 
+## Testy połączeń (jedną komendą)
+
+```bash
+npm run check:myfxbook    # loguje się do Myfxbook API i wypisuje Twoje konta + otwarte pozycje na złocie
+npm run test:bridge       # przy działającym "npm start": wysyła testową pozycję jak EA z MT5 i zamyka ją po 15 s
+```
+
+Oba skrypty biorą dane z `.env` i nigdy nie wypisują hasła.
+
 ## Skąd biorą się dane
 
 Nie istnieje publiczne API, które udostępnia na żywo pozycje „wszystkich najlepszych traderów świata”. MQL5, eToro i ZuluTrade nie dają dostępu do cudzych pozycji, a scrapowanie ich stron łamie regulaminy. Dlatego aplikacja ma trzy legalne źródła (`DATA_SOURCES` w `.env`):

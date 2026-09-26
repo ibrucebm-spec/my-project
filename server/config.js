@@ -17,7 +17,7 @@ const num = (v, d) => (v === undefined || v === '' || isNaN(Number(v)) ? d : Num
 
 module.exports = {
   port: num(process.env.PORT, 3000),
-  sources: (process.env.DATA_SOURCES || 'demo,mt5')
+  sources: (process.argv.includes('--demo') ? 'demo' : process.env.DATA_SOURCES || 'demo,mt5')
     .split(',')
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean),
