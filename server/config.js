@@ -5,7 +5,7 @@ const path = require('path');
 function loadDotEnv(file) {
   if (!fs.existsSync(file)) return;
   // Windows Notepad may save a UTF-8 BOM at the start of the file.
-  const text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+  const text = fs.readFileSync(file, 'utf8').replace(/^﻿/, '');
   for (const line of text.split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=(.*)$/);
     if (!m || process.env[m[1]] !== undefined) continue;
@@ -18,25 +18,22 @@ function loadDotEnv(file) {
 loadDotEnv(path.join(__dirname, '..', '.env'));
 
 const num = (v, d) => (v === undefined || v === '' || isNaN(Number(v)) ? d : Number(v));
+const timeframe = (process.env.AI_TIMEFRAME || 'M15').toUpperCase();
 
 module.exports = {
   port: num(process.env.PORT, 3000),
   // Local machine only by default; set HOST=0.0.0.0 to expose on the network.
   host: process.env.HOST || '127.0.0.1',
-  memoryFile: path.join(__dirname, '..', 'data', 'risk-memory.json'),
-  sources: (process.env.DATA_SOURCES || 'mt5')
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean),
   ingestToken: process.env.INGEST_TOKEN || '',
-  myfxbook: {
-    email: process.env.MYFXBOOK_EMAIL || '',
-    password: process.env.MYFXBOOK_PASSWORD || '',
-    pollSeconds: Math.max(30, num(process.env.MYFXBOOK_POLL_SECONDS, 60)),
-  },
-  filters: {
-    minAgeWeeks: num(process.env.MIN_AGE_WEEKS, 26),
-    maxDrawdownPct: num(process.env.MAX_DRAWDOWN_PCT, 30),
-    minScore: num(process.env.MIN_SCORE, 40),
+  ai: {
+    timeframe,
+    horizon: num(process.env.AI_HORIZON_BARS, 16),
+    slAtr: num(process.env.AI_SL_ATR, 1.0),
+    tpAtr: num(process.env.AI_TP_ATR, 1.5),
+    minEdge: num(process.env.AI_MIN_EDGE, 0.05),
+    minTstat: num(process.env.AI_MIN_TSTAT, 1.5),
+    minSamples: num(process.env.AI_MIN_SAMPLES, 1000),
+    costUsd: num(process.env.AI_COST_USD, 0.35),
+    file: path.join(__dirname, '..', 'data', `model-XAUUSD-${timeframe}.json`),
   },
 };

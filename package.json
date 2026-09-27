@@ -1,7 +1,7 @@
 {
-  "name": "gold-copy-radar",
+  "name": "xau-ai-advisor",
   "version": "0.1.0",
-  "description": "Live monitor of top XAUUSD traders' positions (Myfxbook API, MT5 bridge)",
+  "description": "Self-learning AI trading advisor for XAUUSD (gold), fed live by MetaTrader 5",
   "main": "server/index.js",
   "type": "commonjs",
   "engines": {
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node server/index.js",
     "test": "node --test test/*.test.js",
-    "check:myfxbook": "node scripts/check-myfxbook.js"
+    "train": "node scripts/train-csv.js"
   },
   "license": "MIT"
 }

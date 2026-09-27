@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gold Copy Radar</title>
+  <title>XAU AI Advisor</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="top">
     <div class="brand">
-      <span class="logo">Au</span>
+      <span class="logo">AI</span>
       <div>
-        <h1>Gold Copy Radar</h1>
-        <p class="sub">Pozycje XAUUSD najlepszych traderów na żywo</p>
+        <h1>XAU AI Advisor</h1>
+        <p class="sub">Samouczący się doradca do handlu złotem (XAUUSD)</p>
       </div>
     </div>
     <div class="price-box">
@@ -24,44 +24,48 @@
   </header>
 
   <section class="controls">
-    <label><input type="checkbox" id="only-qualified" checked> Tylko traderzy przechodzący filtry</label>
-    <label><input type="checkbox" id="sound"> Dźwięk przy nowej pozycji</label>
+    <label><input type="checkbox" id="sound"> Dźwięk przy nowym sygnale</label>
     <button id="notify-btn" type="button">Włącz powiadomienia w przeglądarce</button>
-    <span id="filters" class="muted"></span>
   </section>
 
   <div id="stale-banner" class="banner danger" hidden></div>
   <div id="market-banner" class="banner" hidden>
-    Rynek złota jest zamknięty (weekend lub przerwa dzienna). Nowe pozycje pojawią się po otwarciu rynku, zwykle w niedzielę ok. 22:00 UTC (24:00 w Polsce latem).
+    Rynek złota jest zamknięty (weekend lub przerwa dzienna). AI wróci do pracy po otwarciu rynku.
   </div>
 
   <main class="grid">
-    <section class="card positions">
-      <h2>Otwarte pozycje <span id="pos-count" class="pill">0</span></h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Trader</th><th>Kierunek</th><th>Lot</th><th>Otwarcie</th><th>SL</th><th>TP</th><th>Wynik</th><th>Od</th></tr>
-          </thead>
-          <tbody id="positions"></tbody>
-        </table>
-      </div>
-      <p id="no-positions" class="empty">Brak otwartych pozycji u wybranych traderów.</p>
+    <div class="col">
+    <section class="card hint">
+      <h2>Podpowiedź AI <span id="hint-time" class="muted small"></span></h2>
+      <div id="hint"></div>
     </section>
 
-    <section class="card ranking">
-      <h2>Ranking traderów</h2>
-      <ol id="ranking"></ol>
+    <section class="card record">
+      <h2>Skuteczność podpowiedzi <span class="muted small">(tylko na danych, których AI wcześniej nie widziało)</span></h2>
+      <div id="record"></div>
+    </section>
+    </div>
+
+    <div class="col">
+    <section class="card learning">
+      <h2>Nauka modelu</h2>
+      <div id="learning"></div>
     </section>
 
-    <section class="card feed">
-      <h2>Zdarzenia na żywo</h2>
-      <ul id="feed"></ul>
+    <section class="card how">
+      <h2>Jak to działa</h2>
+      <ol class="how-list">
+        <li>MT5 przesyła każdą zamkniętą świecę XAUUSD. Na start wysyła historię, na której AI uczy się od razu.</li>
+        <li>Dla każdej świecy AI liczy 17 cech rynku (trend, momentum, RSI, zmienność, sesja…) i trzy modele: regresja logistyczna, sieć neuronowa i ich zespół szacują szansę, że KUPNO lub SPRZEDAŻ dojdzie do TP przed SL.</li>
+        <li>Gdy rynek pokaże wynik (TP, SL albo koniec czasu), AI porównuje go ze swoją wcześniejszą prognozą i dopiero wtedy się uczy. Dzięki temu uczy się cały czas i dopasowuje do zmian na rynku.</li>
+        <li>Zanim coś Ci podpowie, handluje „na papierze”, czyli symuluje transakcje ze spreadem, bez pieniędzy. Sygnał pokazuje dopiero wtedy, gdy ten handel jest zyskowny w sposób statystycznie istotny. W przeciwnym razie mówi CZEKAJ i wyjaśnia dlaczego.</li>
+      </ol>
     </section>
+    </div>
   </main>
 
   <footer class="muted">
-    To narzędzie informacyjne, nie porada inwestycyjna. Wyniki historyczne nie gwarantują przyszłych zysków; CFD na złoto niosą wysokie ryzyko utraty kapitału.
+    To narzędzie informacyjne, nie porada inwestycyjna. AI może się mylić, a wyniki historyczne nie gwarantują przyszłych zysków. CFD na złoto niosą wysokie ryzyko utraty kapitału. Decyzję i odpowiedzialność za każdą transakcję ponosisz Ty.
   </footer>
 
   <script src="app.js"></script>
