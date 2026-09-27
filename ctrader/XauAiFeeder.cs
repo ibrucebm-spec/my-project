@@ -64,6 +64,7 @@ namespace cAlgo.Robots
         private TimeSpan _span;
         private DateTime _lastTradeClose = DateTime.MinValue; // newest of your closed trades the server has
         private int _ticks;
+        private bool _tradesSynced; // your trade history reached the server at least once
 
         protected override void OnStart()
         {
@@ -110,6 +111,8 @@ namespace cAlgo.Robots
 
         protected override void OnTimer()
         {
+            // Trades go before the candle history (e.g. the server was started after the cBot).
+            if (!_tradesSynced) SyncTrades();
             if (NeedsSync())
                 SyncAll(); // new bar or an earlier send failed
             else
@@ -237,11 +240,13 @@ namespace cAlgo.Robots
                       .Append(']');
                 }
                 string resp = Post(Payload(null, null, "", sb.ToString()));
-                if (resp == null) return;
+                if (resp == null) return; // _tradesSynced stays false: retried on the next tick
                 _lastTradeClose = list[end - 1].ClosingTime;
                 Reconcile(resp);
                 if (list.Count > 500) Log("wysłano " + end + " z " + list.Count + " Twoich transakcji");
             }
+            if (!_tradesSynced && list.Count > 0) Log("wysłano Twoje transakcje na złocie: " + list.Count);
+            _tradesSynced = true;
         }
 
         private string PositionRows()
