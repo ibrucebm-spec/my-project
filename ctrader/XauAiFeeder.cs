@@ -101,8 +101,8 @@ namespace cAlgo.Robots
             // Ask the server what it already has, then send only what is missing.
             var hello = Post(Payload(null, null, "", null));
             if (hello != null) Reconcile(hello);
+            SyncTrades(); // before the candles: the AI reads market conditions for each trade as its candles arrive
             SyncAll();
-            SyncTrades();
             _gold.Bars.BarOpened += args => SyncAll(); // the previous bar has just closed
             Positions.Closed += args => SyncTrades();   // learn from your trade right away
             Timer.Start(TimeSpan.FromSeconds(IntervalSec));
