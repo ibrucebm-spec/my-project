@@ -2,7 +2,9 @@
 
 Samouczący się desk tradingowy dla złota (**XAUUSD**). Uczy się bez przerwy na prawdziwych danych z Twojego **cTradera**, testuje równolegle kilka strategii i podpowiada **KUPNO / SPRZEDAŻ / CZEKAJ** z wejściem, stop lossem, take profitem i **wielkością pozycji w lotach**.
 
-Działa na zasadach, na których pracują systemy w instytucjach:
+Działa na zasadach, na których pracują systemy w instytucjach, i ma trzy „mózgi”: **desk** (modele rynku), **osobisty trener** (uczy się z Twoich transakcji) i **analityka AI** (Claude), który wszystko tłumaczy po polsku.
+
+Zasady desku:
 - modele uczą się na danych,
 - skuteczność jest mierzona wyłącznie na danych, których model wcześniej nie widział,
 - strategia musi udowodnić przewagę statystycznie (z poprawką na testowanie wielu strategii naraz),
@@ -27,10 +29,11 @@ Przeglądarka: decyzja, wyniki (krzywa kapitału w R), laboratorium, dane · pow
 ```
 
 ### Dane
-cBot `ctrader/XauAiFeeder.cs` wysyła:
+cBot `ctrader/XauAiFeeder.cs` wysyła (najpierw Twoje transakcje, potem rynki powiązane, na końcu złoto):
 - świece M15 złota i trzech rynków powiązanych: **EURUSD** jako miara dolara, **XAGUSD** (srebro), **USDJPY** (rentowności/ryzyko),
 - bieżącą cenę i spread złota,
-- saldo konta i parametry symbolu.
+- saldo konta i parametry symbolu,
+- Twoje transakcje i otwarte pozycje na złocie (dla osobistego trenera).
 
 Na start wysyła do 100 000 świec historii (ok. 4 lata M15). Serwer w każdej odpowiedzi podaje, jakie świece już ma. Po restarcie cBot nie wysyła więc wszystkiego od nowa, a po wyczyszczeniu pamięci AI sam dośle całą historię.
 
@@ -66,20 +69,48 @@ Używany jest model, który na ostatnich 1000 wynikach przewidywał najlepiej, m
 
 W testach na rynku czysto losowym desk przez półtora roku danych praktycznie milczy. Na rynku z prawdziwym wzorcem znajduje go i zarabia na danych, których nie widział.
 
+### Reżimy rynku
+Każda transakcja papierowa jest zapisywana razem ze stanem rynku, w którym została otwarta. Stan to kierunek trendu (wzrostowy, spadkowy, konsolidacja) i zmienność (spokojnie, nerwowo), razem 6 reżimów. Jeśli strategia na ostatnich 60 transakcjach w danym reżimie jest na minusie, w tym reżimie jej sygnały są odrzucane. Desk mówi wtedy wprost, dlaczego czeka. Stare straty wygasają, więc strategia może wrócić do reżimu, gdy zacznie w nim zarabiać.
+
+### Osobisty trener AI (uczy się z Twoich transakcji)
+cBot przesyła Twoje zamknięte transakcje i otwarte pozycje na złocie. Dla każdej transakcji AI odtwarza rynek z chwili wejścia (te same 26 cech co desk) i uczy **osobny model: o Tobie**. Model ocenia, w jakich warunkach Twoje decyzje kończą się zyskiem.
+- **Uczciwy test:** każda transakcja jest oceniana modelem, który znał wyniki tylko tych transakcji, które były już zamknięte w chwili jej otwarcia. Widzisz też, ile byś zyskał lub stracił, pomijając transakcje ocenione poniżej 40%.
+- **Gdzie zarabiasz, a gdzie tracisz:** podział według sesji (Azja/Londyn/Nowy Jork), kierunku, reżimu rynku, czasu trzymania i zgodności z deskiem.
+- **Przy otwartej pozycji:** jak w podobnych warunkach szło Ci wcześniej, co na to desk, jaki jest reżim, oraz ostrzeżenie, jeśli pozycja nie ma stop lossa.
+- Model jest silnie regularyzowany, bo trader ma dziesiątki lub setki transakcji, a nie tysiące. W testach dla tradera bez przewagi (losowe transakcje) nie wymyśla wzorców.
+
+Modele desku i tak uczą się z każdej świecy rynku. Twoje transakcje nie „psują” ich nauki, tylko uczą trenera, jak Ty handlujesz.
+
+### Analityk AI (Claude, opcjonalnie)
+Na ekranie możesz zadać pytanie po polsku („dlaczego czekamy?”, „oceń moje transakcje”, „co z moją pozycją?”). Analityk odpowiada na podstawie aktualnego stanu desku, laboratorium i Twojego dziennika, bez wymyślania danych. Wymaga klucza API Anthropic:
+1. Załóż konto na https://console.anthropic.com i utwórz klucz API.
+2. Dopisz do `.env`: `ANTHROPIC_API_KEY=twój_klucz` i uruchom ponownie `start.bat`.
+
+Każde pytanie to jedno zapytanie do modelu Claude Opus 5 (zwykle kilka centów). Analityk działa tylko ze strony desku na Twoim komputerze: inne strony w przeglądarce nie mogą go wywołać.
+
+### Powiadomienia na telefon (Telegram, opcjonalnie)
+1. W Telegramie napisz do **@BotFather** `/newbot` i skopiuj token.
+2. Dopisz do `.env`: `TELEGRAM_BOT_TOKEN=token`, potem napisz dowolną wiadomość do swojego nowego bota.
+3. Kliknij dwukrotnie `telegram.bat` (albo `npm run telegram`). Skrypt sam znajdzie Twój czat i wyśle wiadomość testową.
+4. Uruchom ponownie `start.bat`. Sygnały desku i wyniki podpowiedzi na żywo będą przychodzić na telefon.
+
 ### Desk i ryzyko
 - Z sygnałów bieżącej świecy desk wybiera strategię z najmocniejszym dowodem. Pozostałe zgodne pokazuje jako potwierdzenia, a przy **sprzecznych sygnałach** każe czekać.
 - **Wielkość pozycji:** liczona z salda konta, ryzyka `AI_RISK_PCT` (domyślnie 1%) i odległości do SL. Działa w walucie Twojego konta (np. PLN), bo cBot przesyła wartość punktu.
 - **Blokada spreadu:** brak sygnałów, gdy spread przekracza `AI_MAX_SPREAD_X` × zakładany koszt, np. przy newsach.
 - **Dzienny limit straty:** po stracie `AI_DAILY_LOSS_R` (domyślnie 3R) desk przestaje podpowiadać do końca dnia.
-- **Jedna pozycja naraz:** wynik każdej podpowiedzi trafia do wyników desku (krzywa kapitału w R, profit factor, maksymalne obsunięcie).
+- **Jedna pozycja naraz:** wynik każdej podpowiedzi trafia do wyników desku (krzywa kapitału w R, profit factor, maksymalne obsunięcie). Transakcje z nauki na historii (symulacja) i te na żywo są raportowane osobno.
+- **Prawdziwy spread:** AI mierzy medianę spreadu z ostatnich 24 h. Jeśli jest wyższa niż `AI_COST_USD`, ekran podpowiada nową wartość, bo inaczej wyniki byłyby zbyt optymistyczne.
+- **Spóźnione wejście:** jeśli podpowiedź wygasła albo cena odjechała o 0,3 R lub więcej, ekran ostrzega, żeby nie gonić ruchu.
 
 ## Uruchomienie
 
-**Windows:** zainstaluj Node.js LTS z https://nodejs.org i kliknij dwukrotnie `start.bat`. Plik utworzy ustawienia, wygeneruje token (wyświetli go w czarnym oknie), uruchomi AI i otworzy przeglądarkę. Okno musi zostać otwarte, dopóki AI ma działać. Zamknięcie okna lub Ctrl+C zapisuje pamięć AI.
+**Windows:** zainstaluj Node.js LTS z https://nodejs.org i kliknij dwukrotnie `start.bat`. Za pierwszym razem plik doinstaluje biblioteki (potrzebny internet), potem utworzy ustawienia, wygeneruje token (wyświetli go w czarnym oknie), uruchomi AI i otworzy przeglądarkę. Okno musi zostać otwarte, dopóki AI ma działać. Zamknięcie okna lub Ctrl+C zapisuje pamięć AI.
 
-Ręcznie (Node.js 18+, brak zależności npm):
+Ręcznie (Node.js 18+):
 
 ```bash
+npm install               # biblioteka Anthropic dla analityka AI (reszta nie ma zależności)
 cp .env.example .env      # ustaw INGEST_TOKEN
 npm start                 # http://localhost:3000
 npm test
@@ -124,6 +155,8 @@ Plik CSV zawiera tylko złoto, więc cechy rynków powiązanych będą puste. Pr
 | `AI_RISK_PCT` | `1` | Ryzyko na transakcję w % salda |
 | `AI_DAILY_LOSS_R` | `3` | Dzienny limit straty w R |
 | `AI_MAX_SPREAD_X` | `2` | Blokada, gdy spread > tyle × `AI_COST_USD` |
+| `ANTHROPIC_API_KEY` | – | Włącza analityka AI (Claude) |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | – | Powiadomienia na telefon (`telegram.bat` ustawia chat id) |
 
 Pamięć AI jest w folderze `data/`. Dodana albo zmieniona strategia uczy się automatycznie na zapisanej historii. Usunięcie folderu `data/` oznacza naukę od zera: cBot sam dośle historię.
 
@@ -132,7 +165,7 @@ Pamięć AI jest w folderze `data/`. Dodana albo zmieniona strategia uczy się a
 - To prawdziwe uczenie maszynowe, ale nie ma magii. Rynek złota jest w dużej mierze losowy, a przewaga nawet dużych funduszy jest niewielka. Dlatego system mierzy swoją skuteczność i milczy, gdy jej nie ma. Długie okresy „CZEKAJ” to znak, że zabezpieczenia działają.
 - Wyniki są liczone na świecach: TP/SL sprawdzane po high/low, a gdy świeca dotknie obu, liczy się strata. Realny poślizg i zmienny spread przy newsach mogą je pogorszyć.
 - AI nie zna kalendarza makro (NFP, FOMC, CPI). Blokada spreadu łapie część takich momentów, ale nie wszystkie.
-- cBot nie był kompilowany w środowisku, w którym powstał kod. Jeśli cTrader zgłosi błąd przy Build, skopiuj jego treść.
+- cBot jest kompilowany i uruchamiany w testach z imitacją API cTradera (`ctrader/test/run.sh`, wymaga Mono). Imitacja odtwarza wcześniejszy błąd z prawdziwego cTradera, ale nie jest prawdziwym cTraderem. Jeśli cTrader zgłosi błąd przy Build, skopiuj jego treść.
 - Aplikacja domyślnie działa tylko na Twoim komputerze (127.0.0.1).
 
 > To narzędzie informacyjne, nie porada inwestycyjna. AI może się mylić, a wyniki historyczne nie gwarantują przyszłych zysków. CFD na złoto niosą wysokie ryzyko utraty kapitału. Zacznij od konta demo.

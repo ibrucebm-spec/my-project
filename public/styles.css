@@ -172,3 +172,9 @@ footer { padding: 0 20px 24px; font-size: 12px; }
 .ask { display: flex; gap: 8px; }
 .ask input { flex: 1; min-width: 0; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font: inherit; }
 .ask input:focus { outline: 2px solid var(--gold); outline-offset: 0; }
+@media (max-width: 520px) {
+  .strat-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .strat-grid b { text-align: left; margin-bottom: 6px; }
+  .kv { flex-direction: column; gap: 0; }
+  .kv b { text-align: left; }
+}

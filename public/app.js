@@ -321,7 +321,7 @@
       } else {
         const better = e.skippedCount && -e.skippedProfit > 0;
         parts.push(`<p class="small">Test na ${e.tested} Twoich transakcjach (każda oceniona modelem uczonym tylko na wcześniejszych): trener przewiduje Twoje wyniki <b class="${e.skill > 0 ? 'pos' : 'neg'}">${e.skill > 0 ? 'lepiej' : 'nie lepiej'}</b> niż przypadek (${signed(e.skill * 100, 1)}%).
-          ${e.skippedCount ? `Gdybyś pomijał transakcje ocenione poniżej 40% (${e.skippedCount}), Twój wynik byłby ${better ? 'lepszy' : 'gorszy'} o ${money(Math.abs(e.skippedProfit))}.` : ''}</p>`);
+          ${e.skippedCount ? `Gdybyś pomijał transakcje ocenione poniżej 40% (${e.skippedCount}), Twój wynik byłby ${better ? 'lepszy' : 'gorszy'} o ${fmt(Math.abs(e.skippedProfit))} ${esc(j.currency)}.` : ''}</p>`);
       }
       if (j.drivers.length) {
         parts.push(`<div class="reasons"><div class="muted small">Co najbardziej decyduje o Twoich wynikach:</div><ul>${j.drivers
