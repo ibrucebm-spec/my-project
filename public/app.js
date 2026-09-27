@@ -357,7 +357,7 @@
   }
   async function ask(question) {
     if (state && !state.analyst) {
-      addChat('system', 'Analityk AI jest wyłączony. Dodaj do pliku .env linię ANTHROPIC_API_KEY=twój_klucz (klucz z console.anthropic.com) i uruchom ponownie start.bat.');
+      addChat('system', 'Analityk AI jest wyłączony. Utwórz klucz API na console.anthropic.com, kliknij dwukrotnie analityk.bat w folderze desku, wklej klucz i uruchom ponownie start.bat.');
       return;
     }
     addChat('user', question);

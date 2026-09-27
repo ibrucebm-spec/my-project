@@ -83,8 +83,9 @@ Modele desku i tak uczą się z każdej świecy rynku. Twoje transakcje nie „p
 
 ### Analityk AI (Claude, opcjonalnie)
 Na ekranie możesz zadać pytanie po polsku („dlaczego czekamy?”, „oceń moje transakcje”, „co z moją pozycją?”). Analityk odpowiada na podstawie aktualnego stanu desku, laboratorium i Twojego dziennika, bez wymyślania danych. Wymaga klucza API Anthropic:
-1. Załóż konto na https://console.anthropic.com i utwórz klucz API.
-2. Dopisz do `.env`: `ANTHROPIC_API_KEY=twój_klucz` i uruchom ponownie `start.bat`.
+1. Załóż konto na https://console.anthropic.com, doładuj środki (Billing) i utwórz klucz API (API Keys).
+2. Kliknij dwukrotnie `analityk.bat`, wklej klucz i naciśnij Enter. Skrypt sprawdzi, czy klucz działa, i zapisze go w `.env`.
+3. Uruchom ponownie `start.bat`.
 
 Każde pytanie to jedno zapytanie do modelu Claude Opus 5 (zwykle kilka centów). Analityk działa tylko ze strony desku na Twoim komputerze: inne strony w przeglądarce nie mogą go wywołać.
 
