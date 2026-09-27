@@ -113,7 +113,7 @@ class Advisor extends EventEmitter {
   }
 
   // Appends closed bars (oldest first). Bars at or before the last known one
-  // are ignored, so the MT5 feeder can safely resend history.
+  // are ignored, so the platform feeder can safely resend history.
   addBars(timeframe, rawBars) {
     if (timeframe && String(timeframe).toUpperCase() !== this.opts.timeframe) {
       throw new Error(`interwał ${timeframe} nie pasuje do AI_TIMEFRAME=${this.opts.timeframe}`);
@@ -400,7 +400,7 @@ class Advisor extends EventEmitter {
       return;
     }
     if (state.timeframe !== this.opts.timeframe) {
-      console.log(`[ai] zmieniony interwał (${state.timeframe} -> ${this.opts.timeframe}): zaczynam od zera, MT5 prześle nową historię`);
+      console.log(`[ai] zmieniony interwał (${state.timeframe} -> ${this.opts.timeframe}): zaczynam od zera, cTrader/MT5 prześle nową historię`);
       return;
     }
     const bars = (state.bars || []).map(parseBar).filter(Boolean);

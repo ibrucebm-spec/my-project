@@ -1,4 +1,4 @@
-// Teaches the AI from a candle history exported from MT5 and prints an
+// Teaches the AI from a candle history CSV (e.g. exported from MT5) and prints an
 // honest report (every result is out-of-sample: the model is scored on each
 // candle before it learns from it).
 //

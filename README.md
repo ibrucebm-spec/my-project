@@ -1,18 +1,18 @@
 # XAU AI Advisor
 
-Twój własny, samouczący się doradca AI do handlu złotem (**XAUUSD**). Uczy się bez przerwy na prawdziwych świecach z Twojego MetaTradera 5 i podpowiada **KUPNO / SPRZEDAŻ / CZEKAJ** razem z poziomem wejścia, stop lossem i take profitem.
+Twój własny, samouczący się doradca AI do handlu złotem (**XAUUSD**). Uczy się bez przerwy na prawdziwych świecach z Twojego **cTradera** (albo MetaTradera 5) i podpowiada **KUPNO / SPRZEDAŻ / CZEKAJ** razem z poziomem wejścia, stop lossem i take profitem.
 
 Działa jak systemy wspomagania decyzji w instytucjach: model uczy się na danych, jego skuteczność jest stale mierzona na danych, których wcześniej nie widział, a sygnał trafia do człowieka dopiero wtedy, gdy model udowodni przewagę. Decyzję o transakcji podejmujesz Ty. System niczego nie otwiera sam.
 
 ## Jak to działa
 
 ```
-MT5 (EA XauAiFeeder) ──świece + cena──▶ serwer AI ──▶ przeglądarka (podpowiedzi, skuteczność, powiadomienia)
+cTrader (cBot XauAiFeeder) ──świece + cena──▶ serwer AI ──▶ przeglądarka (podpowiedzi, skuteczność, powiadomienia)
                                            │
                                            └─ data/model-XAUUSD-M15.json (pamięć modelu)
 ```
 
-1. **Dane.** EA `mt5/XauAiFeeder.mq5` przy starcie wysyła historię (domyślnie 20 000 świec M15, czyli około 10 miesięcy), a potem każdą nową zamkniętą świecę i bieżącą cenę.
+1. **Dane.** cBot `ctrader/XauAiFeeder.cs` (albo EA `mt5/XauAiFeeder.mq5`) przy starcie wysyła historię (domyślnie 20 000 świec M15, czyli około 10 miesięcy), a potem każdą nową zamkniętą świecę i bieżącą cenę.
 2. **Cechy rynku.** Dla każdej świecy AI liczy 17 cech: ruch ceny z 1/4/16/64 świec, RSI, odległość od EMA20/EMA50 i ich nachylenie, zmienność (ATR) teraz względem średniej, pozycję w zakresie 50 świec, odchylenie Bollingera, wolumen tickowy i porę dnia (sesja azjatycka, londyńska, nowojorska). Odległości są liczone w ATR, więc model działa tak samo przy złocie po 1800 $ i po 5000 $.
 3. **Modele AI.** Trzy modele osobno dla KUPNA i SPRZEDAŻY szacują szansę, że transakcja dojdzie do TP przed SL:
    - **regresja logistyczna** (stabilna, szybko łapie proste zależności),
@@ -37,7 +37,23 @@ npm start                 # http://localhost:3000
 npm test
 ```
 
-### Podłączenie MT5
+### Podłączenie cTradera
+
+1. Otwórz cTrader → zakładka **Algo** → **cBots** → **New** (nowy cBot). Usuń cały przykładowy kod i wklej zawartość pliku `ctrader/XauAiFeeder.cs`, potem kliknij **Build**.
+2. Otwórz wykres **XAUUSD** i dodaj do niego cBota **XauAiFeeder** (przycisk „+” przy cBocie → instancja na XAUUSD).
+3. Ustaw parametry:
+   - `Ingest token`: ten sam ciąg co `INGEST_TOKEN` w `.env`,
+   - `Timeframe`: **Minute15** (musi pasować do `AI_TIMEFRAME=M15`; dla H1 wybierz `Hour`),
+   - `Server URL`: zostaw `http://127.0.0.1:3000/api/bars`, jeśli serwer działa na tym samym komputerze.
+4. Uruchom cBota (▶). cTrader zapyta o **pełny dostęp** (Full Access). Zgoda jest potrzebna, bo cBot wysyła dane przez HTTP do Twojego serwera. cBot niczego nie kupuje ani nie sprzedaje.
+5. W zakładce **Log** zobaczysz, ile świec historii jest dostępnych i jak idzie wysyłanie. AI uczy się na nich od razu.
+
+Wskazówki:
+- Działa z cTraderem na komputerze (Windows/Mac). cTrader Web i mobilny nie uruchamiają cBotów przez noc; do ciągłej nauki cTrader musi być włączony, tak samo jak serwer (`npm start`).
+- Jeśli broker udostępnia mniej historii niż 20 000 świec, cBot wyśle tyle, ile jest. Zwykle to i tak kilka miesięcy M15.
+- Konto demo wystarczy: cBot tylko czyta ceny.
+
+### Podłączenie MT5 (alternatywa)
 
 1. Skopiuj `mt5/XauAiFeeder.mq5` do `MQL5/Experts` i skompiluj w MetaEditorze.
 2. *Narzędzia → Opcje → Doradcy Expert → Zezwalaj na WebRequest* i dodaj `http://127.0.0.1:3000`.
@@ -48,7 +64,7 @@ Jeśli terminal ma mało historii, przewiń wykres M15 mocno w lewo (MT5 dociąg
 
 ### Nauka z pliku CSV (opcjonalnie)
 
-Możesz od razu nauczyć model na dłuższej historii wyeksportowanej z MT5 (*Widok → Symbole → Słupki → Eksportuj*):
+Zwykle niepotrzebne, bo cBot sam wysyła historię. Jeśli masz dłuższą historię w CSV (np. wyeksportowaną z MT5: *Widok → Symbole → Słupki → Eksportuj*), możesz od razu nauczyć na niej model:
 
 ```bash
 npm run train -- XAUUSD_M15.csv --dry              # tylko test: raport skuteczności, model bez zmian
@@ -69,7 +85,7 @@ Włącz powiadomienia w przeglądarce, a dostaniesz alert przy każdym nowym syg
 
 | Zmienna | Domyślnie | Znaczenie |
 |---|---|---|
-| `AI_TIMEFRAME` | `M15` | Interwał świec (M5, M15, M30, H1, H4); taki sam w EA |
+| `AI_TIMEFRAME` | `M15` | Interwał świec (M5, M15, M30, H1, H4); taki sam w cBocie (Minute15, Hour…) |
 | `AI_HORIZON_BARS` | `16` | Maksymalny czas transakcji w świecach (16 × M15 = 4 h) |
 | `AI_SL_ATR` / `AI_TP_ATR` | `1.0` / `1.5` | SL i TP w wielokrotnościach ATR(14) |
 | `AI_COST_USD` | `0.35` | Spread + prowizja na uncję. Wpisz wartość swojego brokera |
@@ -77,15 +93,16 @@ Włącz powiadomienia w przeglądarce, a dostaniesz alert przy każdym nowym syg
 | `AI_MIN_EDGE` | `0.05` | Wymagana przewaga szansy nad progiem opłacalności |
 | `AI_MIN_TSTAT` | `1.5` | Jak pewny musi być zysk na papierze (wyżej = mniej sygnałów, ale pewniejsze) |
 
-Zmiana interwału, SL/TP, horyzontu lub kosztu oznacza, że stare lekcje przestają pasować. Model uczy się wtedy od nowa na zapisanych świecach (albo, przy zmianie interwału, na nowej historii z MT5).
+Zmiana interwału, SL/TP, horyzontu lub kosztu oznacza, że stare lekcje przestają pasować. Model uczy się wtedy od nowa na zapisanych świecach (albo, przy zmianie interwału, na nowej historii z cTradera lub MT5).
 
 ## Uczciwie o możliwościach
 
 - To prawdziwe uczenie maszynowe, ale nie ma magii. Rynek złota jest w dużej mierze losowy, a przewaga nawet najlepszych funduszy jest mała. Dlatego system mierzy swoją skuteczność i milczy, gdy jej nie ma. Długie okresy z samym „CZEKAJ” są normalne i świadczą o tym, że zabezpieczenia działają.
 - Skuteczność jest liczona na świecach zamknięcia (TP/SL sprawdzane po high/low świecy; gdy świeca dotknie obu, liczy się strata). Realny poślizg i zmienny spread przy newsach mogą pogorszyć wynik.
 - Model nie zna kalendarza makro (NFP, FOMC, CPI). W dniu ważnych danych zachowaj szczególną ostrożność.
-- Czas świec jest przeliczany z czasu brokera na UTC według bieżącego przesunięcia, więc historia sprzed zmiany czasu letniego/zimowego może być przesunięta o godzinę.
-- EA nie był kompilowany w tym środowisku (brak MetaEditora). Przy pierwszym uruchomieniu sprawdź zakładkę „Eksperci”.
+- W MT5 czas świec jest przeliczany z czasu brokera na UTC według bieżącego przesunięcia, więc historia sprzed zmiany czasu letniego/zimowego może być przesunięta o godzinę (w cTraderze tego problemu nie ma).
+- cBot i EA nie były kompilowane w tym środowisku (brak cTradera i MetaEditora). Przy pierwszym uruchomieniu sprawdź zakładkę Log w cTraderze (albo „Eksperci” w MT5). Format danych, które wysyłają, jest sprawdzony testami serwera.
+- cBot pobiera czasy świec w UTC (`TimeZone = UTC`), więc godziny sesji są liczone poprawnie przez cały rok.
 - Aplikacja domyślnie działa tylko na Twoim komputerze (127.0.0.1). Żeby udostępnić ją w sieci, ustaw `HOST=0.0.0.0` i koniecznie mocny `INGEST_TOKEN`.
 
 > To narzędzie informacyjne, nie porada inwestycyjna. AI może się mylić, a wyniki historyczne nie gwarantują przyszłych zysków. CFD na złoto niosą wysokie ryzyko utraty kapitału. Zacznij od konta demo.

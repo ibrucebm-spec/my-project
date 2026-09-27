@@ -93,7 +93,7 @@ function createApp(cfg = config) {
 
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, state());
 
-    // MT5 feeder: closed candles (history first, then each new bar) + live price.
+    // cTrader cBot / MT5 EA feeder: closed candles (history first, then each new bar) + live price.
     if (url.pathname === '/api/bars' && req.method === 'POST') {
       if (!tokenOk(req)) return json(res, 401, { error: 'invalid token' });
       try {
@@ -132,9 +132,9 @@ function createApp(cfg = config) {
 }
 
 if (require.main === module) {
-  if (!config.ingestToken) console.warn('[mt5] INGEST_TOKEN nie ustawiony: serwer odrzuci dane z MT5');
+  if (!config.ingestToken) console.warn('[feeder] INGEST_TOKEN nie ustawiony: serwer odrzuci dane z cTradera/MT5');
   else if (config.ingestToken === DEFAULT_TOKEN || config.ingestToken.length < 16) {
-    console.warn('[mt5] UWAGA: INGEST_TOKEN jest domyślny albo krótszy niż 16 znaków. Ustaw długi losowy ciąg w .env');
+    console.warn('[feeder] UWAGA: INGEST_TOKEN jest domyślny albo krótszy niż 16 znaków. Ustaw długi losowy ciąg w .env');
   }
   const app = createApp();
   const a = app.advisor.snapshot();

@@ -46,7 +46,7 @@
     const p = state.price;
     el.textContent = typeof p === 'number' ? fmt(p) : '–';
     el.classList.toggle('stale', !!state.priceStale);
-    $('price-note').textContent = typeof p !== 'number' ? 'brak danych z MT5' : state.priceStale ? `nieaktualna (${ago(state.priceAt)})` : '';
+    $('price-note').textContent = typeof p !== 'number' ? 'brak danych z platformy' : state.priceStale ? `nieaktualna (${ago(state.priceAt)})` : '';
     if (typeof p === 'number' && p !== lastPrice) {
       el.classList.toggle('up', lastPrice !== null && p > lastPrice);
       el.classList.toggle('down', lastPrice !== null && p < lastPrice);
@@ -67,7 +67,7 @@
     const h = ai.hint;
     $('hint-time').textContent = h ? `świeca ${ai.timeframe} z ${time(h.barTime)}` : '';
     if (!h) {
-      $('hint').innerHTML = `<p class="empty">Czekam na dane z MT5. AI potrzebuje co najmniej 120 świec, żeby zacząć (teraz ${ai.bars}). Uruchom EA <b>XauAiFeeder</b> na wykresie XAUUSD (README).</p>`;
+      $('hint').innerHTML = `<p class="empty">Czekam na dane z cTradera. AI potrzebuje co najmniej 120 świec, żeby zacząć (teraz ${ai.bars}). Uruchom cBota <b>XauAiFeeder</b> na wykresie XAUUSD (README).</p>`;
       return;
     }
     const act = h.action;
@@ -157,7 +157,7 @@
     const staleBars = state.marketOpen && ai.bars > 0 && barAge > (ai.tfMinutes * 3 + 2) * 60_000;
     $('stale-banner').hidden = !staleBars;
     $('stale-banner').textContent = staleBars
-      ? `Uwaga: od ${ago(ai.lastBarTime)} nie przyszła nowa świeca z MT5. Podpowiedź może być nieaktualna. Sprawdź, czy EA XauAiFeeder działa.`
+      ? `Uwaga: od ${ago(ai.lastBarTime)} nie przyszła nowa świeca z cTradera. Podpowiedź może być nieaktualna. Sprawdź, czy cBot XauAiFeeder działa.`
       : '';
     document.body.classList.toggle('stale-hint', staleBars);
     renderHint(ai);
