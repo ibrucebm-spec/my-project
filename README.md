@@ -29,7 +29,9 @@ cTrader (cBot XauAiFeeder) ──świece + cena──▶ serwer AI ──▶ prz
 
 ## Uruchomienie
 
-Wymagany Node.js 18+. Brak zależności npm: sieć neuronowa i cała reszta są napisane od zera.
+**Najprościej (Windows):** zainstaluj Node.js LTS z https://nodejs.org, a potem kliknij dwukrotnie `start.bat`. Plik sam utworzy ustawienia, wygeneruje token (wyświetli go w czarnym oknie), uruchomi AI i otworzy przeglądarkę. Okno musi zostać otwarte, dopóki AI ma działać.
+
+Ręcznie: wymagany Node.js 18+. Brak zależności npm: sieć neuronowa i cała reszta są napisane od zera.
 
 ```bash
 cp .env.example .env      # ustaw INGEST_TOKEN (długi losowy ciąg)
