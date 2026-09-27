@@ -2,7 +2,7 @@
 // keeps learning as long as the market produces new candles, and serialises
 // to plain JSON so it survives restarts.
 //
-// Two learners compete (plus their average):
+// Online learners (gradient boosted trees live in gbdt.js):
 //   - linear:  logistic regression, stable, learns simple relations fast,
 //   - mlp:     neural network with one hidden layer (tanh), can learn
 //              non-linear patterns such as "RSI extreme only in a strong trend".
@@ -166,14 +166,22 @@ class MLP {
   }
 }
 
-// Averages the probabilities of several models.
+// Averages the probabilities of several models (skipping untrained ones).
 class Ensemble {
   constructor(members) {
     this.members = members;
   }
 
   predict(x) {
-    return this.members.reduce((s, m) => s + m.predict(x), 0) / this.members.length;
+    let sum = 0;
+    let n = 0;
+    for (const m of this.members) {
+      const p = m.predict(x);
+      if (p === null) continue;
+      sum += p;
+      n++;
+    }
+    return n ? sum / n : null;
   }
 }
 

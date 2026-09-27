@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>XAU AI Advisor</title>
+  <title>XAU AI Desk</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -11,14 +11,18 @@
     <div class="brand">
       <span class="logo">AI</span>
       <div>
-        <h1>XAU AI Advisor</h1>
-        <p class="sub">Samouczący się doradca do handlu złotem (XAUUSD)</p>
+        <h1>XAU AI Desk</h1>
+        <p class="sub">Samouczący się desk tradingowy dla złota (XAUUSD)</p>
       </div>
     </div>
-    <div class="price-box">
-      <span class="label">XAUUSD</span>
-      <span id="price" class="price">–</span>
-      <span id="price-note" class="price-note"></span>
+    <div class="top-stats">
+      <div class="price-box">
+        <span class="label">XAUUSD</span>
+        <span id="price" class="price">–</span>
+        <span id="price-note" class="price-note"></span>
+      </div>
+      <div class="mini"><span class="label">Spread</span><b id="spread">–</b></div>
+      <div class="mini"><span class="label">Konto</span><b id="balance">–</b></div>
     </div>
     <div class="status"><span id="conn" class="dot"></span><span id="conn-text">łączenie z serwerem…</span></div>
   </header>
@@ -30,37 +34,45 @@
 
   <div id="stale-banner" class="banner danger" hidden></div>
   <div id="market-banner" class="banner" hidden>
-    Rynek złota jest zamknięty (weekend lub przerwa dzienna). AI wróci do pracy po otwarciu rynku.
+    Rynek złota jest zamknięty (weekend lub przerwa dzienna). Desk wróci do pracy po otwarciu rynku.
   </div>
 
   <main class="grid">
     <div class="col">
-    <section class="card hint">
-      <h2>Podpowiedź AI <span id="hint-time" class="muted small"></span></h2>
-      <div id="hint"></div>
-    </section>
+      <section class="card">
+        <h2>Decyzja desku <span id="decision-time" class="muted small"></span></h2>
+        <div id="decision"></div>
+      </section>
 
-    <section class="card record">
-      <h2>Skuteczność podpowiedzi <span class="muted small">(tylko na danych, których AI wcześniej nie widziało)</span></h2>
-      <div id="record"></div>
-    </section>
+      <section class="card">
+        <h2>Wyniki desku <span class="muted small">(tylko na danych, których AI wcześniej nie widziało; spread odjęty)</span></h2>
+        <div id="ledger-tiles"></div>
+        <div id="equity" class="chart" role="img"></div>
+        <div id="ledger-table"></div>
+      </section>
     </div>
 
     <div class="col">
-    <section class="card learning">
-      <h2>Nauka modelu</h2>
-      <div id="learning"></div>
-    </section>
+      <section class="card">
+        <h2>Laboratorium strategii</h2>
+        <div id="lab"></div>
+      </section>
 
-    <section class="card how">
-      <h2>Jak to działa</h2>
-      <ol class="how-list">
-        <li>cTrader (cBot XauAiFeeder) przesyła każdą zamkniętą świecę XAUUSD. Na start wysyła historię, na której AI uczy się od razu.</li>
-        <li>Dla każdej świecy AI liczy 17 cech rynku (trend, momentum, RSI, zmienność, sesja…) i trzy modele: regresja logistyczna, sieć neuronowa i ich zespół szacują szansę, że KUPNO lub SPRZEDAŻ dojdzie do TP przed SL.</li>
-        <li>Gdy rynek pokaże wynik (TP, SL albo koniec czasu), AI porównuje go ze swoją wcześniejszą prognozą i dopiero wtedy się uczy. Dzięki temu uczy się cały czas i dopasowuje do zmian na rynku.</li>
-        <li>Zanim coś Ci podpowie, handluje „na papierze”, czyli symuluje transakcje ze spreadem, bez pieniędzy. Sygnał pokazuje dopiero wtedy, gdy ten handel jest zyskowny w sposób statystycznie istotny. W przeciwnym razie mówi CZEKAJ i wyjaśnia dlaczego.</li>
-      </ol>
-    </section>
+      <section class="card">
+        <h2>Dane i ryzyko</h2>
+        <div id="data"></div>
+      </section>
+
+      <section class="card how">
+        <h2>Jak to działa</h2>
+        <ol class="how-list">
+          <li><b>Dane.</b> cBot w cTraderze przesyła świece M15 złota oraz rynków powiązanych (EURUSD jako dolar, srebro, USDJPY), cenę, spread i saldo konta.</li>
+          <li><b>Laboratorium.</b> Z M15 budowane są świece H1 i H4. Sześć strategii (różne interwały i profile SL/TP) uczy się niezależnie. Każda ma trzy modele AI: sieć neuronową, drzewa gradientowe (GBDT, jak XGBoost) i regresję logistyczną, plus ich zespół.</li>
+          <li><b>Uczciwy pomiar.</b> Każda prognoza jest oceniana, zanim model pozna wynik. Model uczy się dopiero potem, więc wszystkie statystyki pochodzą z danych, których AI nie widziało.</li>
+          <li><b>Dowód przewagi.</b> Strategia najpierw handluje „na papierze”, czyli symuluje transakcje bez pieniędzy. Do desku trafia dopiero wtedy, gdy ostatnie 50–250 transakcji jest zyskowne z t-stat powyżej progu. Próg jest podniesiony, bo testujemy wiele strategii naraz, a to zwiększa szansę na przypadkowy „sukces”.</li>
+          <li><b>Desk.</b> Wybiera najlepiej udowodnioną strategię z aktualnym sygnałem i odrzuca sprzeczne sygnały. Liczy wielkość pozycji z Twojego salda i ryzyka %. Blokuje sygnały przy szerokim spreadzie i po dziennym limicie straty.</li>
+        </ol>
+      </section>
     </div>
   </main>
 
@@ -68,6 +80,7 @@
     To narzędzie informacyjne, nie porada inwestycyjna. AI może się mylić, a wyniki historyczne nie gwarantują przyszłych zysków. CFD na złoto niosą wysokie ryzyko utraty kapitału. Decyzję i odpowiedzialność za każdą transakcję ponosisz Ty.
   </footer>
 
+  <div id="tooltip" class="tooltip" hidden></div>
   <script src="app.js"></script>
 </body>
 </html>

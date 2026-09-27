@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //| XauAiFeeder.mq5                                                  |
-//| Wysyła zamknięte świece XAUUSD do XAU AI Advisor                 |
+//| Wysyła zamknięte świece XAUUSD do XAU AI Desk                    |
 //| (POST /api/bars). Przy starcie wysyła historię, żeby AI mogło    |
 //| się na niej nauczyć, potem każdą nową świecę i bieżącą cenę.     |
 //|                                                                  |
@@ -10,7 +10,7 @@
 //| WebRequest dla wymienionych URL" -> dodaj adres serwera, np.     |
 //| http://127.0.0.1:3000                                            |
 //+------------------------------------------------------------------+
-#property copyright "XAU AI Advisor"
+#property copyright "XAU AI Desk"
 #property version   "1.00"
 
 input string          ServerUrl   = "http://127.0.0.1:3000/api/bars"; // Adres endpointu

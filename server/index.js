@@ -3,30 +3,28 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const config = require('./config');
-const { Advisor } = require('./ai/advisor');
+const { Lab } = require('./ai/lab');
 const { isGoldMarketOpen } = require('./market');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
-const MAX_BODY = 2 * 1024 * 1024; // history arrives in chunks of ~1000 bars
+const MAX_BODY = 4 * 1024 * 1024; // history arrives in chunks of ~1000 bars
 const PRICE_STALE_MS = 60_000;
 const DEFAULT_TOKEN = 'zmien-mnie-na-dlugi-losowy-token';
 
 function createApp(cfg = config) {
-  const advisor = new Advisor(cfg.ai);
+  const lab = new Lab(cfg.lab);
   const clients = new Set();
-  let price = null;
-  let priceAt = 0;
-  let priceVersion = 0;
 
   const state = () => {
     const now = Date.now();
+    const { price, priceAt } = lab.live;
     return {
       price,
       priceAt: priceAt ? new Date(priceAt).toISOString() : null,
       priceStale: !priceAt || now - priceAt > PRICE_STALE_MS,
       marketOpen: isGoldMarketOpen(),
-      ai: advisor.snapshot(),
+      lab: lab.snapshot(),
       at: new Date(now).toISOString(),
     };
   };
@@ -36,17 +34,16 @@ function createApp(cfg = config) {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of clients) res.write(msg);
   };
-  advisor.on('signal', (hint) => broadcast('signal', hint));
+  lab.on('signal', (decision) => broadcast('signal', decision));
 
   // Push state when something changed, and every 5 s regardless so the
   // "outdated data" markers stay current.
-  let sent = '';
+  let sentVersion = -1;
   let lastSent = 0;
   const tick = setInterval(() => {
     const now = Date.now();
-    const v = `${advisor.version}:${priceVersion}`;
-    if (v === sent && now - lastSent < 5000) return;
-    sent = v;
+    if (lab.version === sentVersion && now - lastSent < 5000) return;
+    sentVersion = lab.version;
     lastSent = now;
     broadcast('state', state());
   }, 500);
@@ -93,19 +90,16 @@ function createApp(cfg = config) {
 
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, state());
 
-    // cTrader cBot / MT5 EA feeder: closed candles (history first, then each new bar) + live price.
+    // cTrader cBot / MT5 EA: closed candles of gold and related markets,
+    // live price, spread and account data. The response tells the feeder the
+    // last candle stored per symbol, so it can resend anything missing.
     if (url.pathname === '/api/bars' && req.method === 'POST') {
       if (!tokenOk(req)) return json(res, 401, { error: 'invalid token' });
       try {
         // MQL5 WebRequest may append a trailing NUL byte.
         const body = JSON.parse((await readBody(req)).replace(/\0+$/, ''));
-        if (typeof body.price === 'number' && body.price > 0) {
-          price = body.price;
-          priceAt = Date.now();
-          priceVersion++;
-        }
-        const r = advisor.addBars(body.timeframe, body.bars || []);
-        return json(res, 200, { ok: true, ...r, learned: advisor.stats.learned });
+        const r = lab.ingest(body);
+        return json(res, 200, { ok: true, ...r, learned: Math.max(0, ...lab.strategies.map((s) => s.stats.learned)) });
       } catch (err) {
         return json(res, 400, { error: err.message });
       }
@@ -124,11 +118,12 @@ function createApp(cfg = config) {
 
   function close() {
     clearInterval(tick);
+    lab.flush();
     for (const c of clients) c.end();
     server.close();
   }
 
-  return { server, advisor, close };
+  return { server, lab, close };
 }
 
 if (require.main === module) {
@@ -136,16 +131,25 @@ if (require.main === module) {
   else if (config.ingestToken === DEFAULT_TOKEN || config.ingestToken.length < 16) {
     console.warn('[feeder] UWAGA: INGEST_TOKEN jest domyślny albo krótszy niż 16 znaków. Ustaw długi losowy ciąg w .env');
   }
+  console.log('[lab] wczytuję pamięć AI…');
   const app = createApp();
-  const a = app.advisor.snapshot();
-  console.log(`[ai] XAUUSD ${a.timeframe}: ${a.bars} świec w pamięci, model nauczony na ${a.learned} wynikach`);
+  const s = app.lab.snapshot();
+  console.log(`[lab] XAUUSD ${s.baseTf}: ${s.bars} świec, ${s.strategies.length} strategii, rynki powiązane: ${s.aux.map((a) => a.symbol).join(', ') || 'brak'}`);
+  console.log(`[lab] próg dowodu przewagi: t-stat ≥ ${s.threshold.tstat.toFixed(2)} (poprawka na ${s.threshold.strategies} testowanych strategii)`);
+  // Save the learned state when the window is closed or Ctrl+C is pressed.
+  const shutdown = () => {
+    console.log('\nZapisuję pamięć AI…');
+    app.lab.flush();
+    process.exit(0);
+  };
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) process.on(sig, shutdown);
   app.server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') console.error(`Port ${config.port} jest zajęty: aplikacja już działa w innym oknie albo zmień PORT w .env`);
     else console.error(err);
     process.exit(1);
   });
   app.server.listen(config.port, config.host, () => {
-    console.log(`XAU AI Advisor: http://localhost:${config.port}`);
+    console.log(`XAU AI Desk: http://localhost:${config.port}`);
     if (config.host !== '127.0.0.1') console.warn(`[config] serwer nasłuchuje na ${config.host}: dostępny dla innych urządzeń w sieci`);
   });
 }

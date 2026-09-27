@@ -1,7 +1,7 @@
 {
-  "name": "xau-ai-advisor",
-  "version": "0.1.0",
-  "description": "Self-learning AI trading advisor for XAUUSD (gold), fed live by cTrader (or MetaTrader 5)",
+  "name": "xau-ai-desk",
+  "version": "0.2.0",
+  "description": "Self-learning AI trading desk for XAUUSD (gold): strategy lab, GBDT + neural nets, risk management, fed by cTrader",
   "main": "server/index.js",
   "type": "commonjs",
   "engines": {

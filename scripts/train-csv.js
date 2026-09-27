@@ -11,7 +11,7 @@
 
 const fs = require('fs');
 const config = require('../server/config');
-const { Advisor } = require('../server/ai/advisor');
+const { Lab } = require('../server/ai/lab');
 
 const ACTION = { long: 'KUPNO', short: 'SPRZEDAŻ', wait: 'CZEKAJ' };
 
@@ -50,28 +50,33 @@ function main() {
     process.exit(1);
   }
   console.log(`Wczytano ${bars.length} świec: ${new Date(bars[0][0]).toISOString()} – ${new Date(bars[bars.length - 1][0]).toISOString()}`);
+  console.log('Plik CSV zawiera tylko złoto, więc cechy rynków powiązanych (EURUSD, srebro, USDJPY) będą puste.\n');
 
-  const advisor = new Advisor({ ...config.ai, file: dry ? null : config.ai.file });
-  const before = advisor.stats.learned;
+  const lab = new Lab({ ...config.lab, dir: dry ? null : config.lab.dir });
   const t0 = Date.now();
-  const r = advisor.addBars(config.ai.timeframe, bars);
-  const s = advisor.snapshot();
-  const pct = (v) => (v === null || v === undefined ? '–' : `${(v * 100).toFixed(1)}%`);
-  const n2 = (v) => (v === null || v === undefined ? '–' : v.toFixed(2));
-
-  console.log(`\nNowe świece: ${r.accepted} (pominięte jako już znane: ${r.ignored}, błędne: ${r.invalid}), czas ${((Date.now() - t0) / 1000).toFixed(1)} s`);
-  console.log(`Model nauczony na ${s.learned} wynikach (+${s.learned - before})\n`);
-  console.log('Przewaga modeli nad zgadywaniem (skill > 0 = lepiej niż przypadek, liczone na danych, których model nie widział):');
-  for (const dir of ['long', 'short']) {
-    const m = s.models[dir];
-    const skills = Object.entries(m.skill).map(([k, v]) => `${s.modelLabels[k]} ${pct(v)}`).join(', ');
-    console.log(`  ${dir === 'long' ? 'KUPNO   ' : 'SPRZEDAŻ'}  ${skills}  | najlepszy: ${s.modelLabels[m.best]} | TP trafiane bazowo: ${pct(m.baseRate)}`);
+  let accepted = 0;
+  for (let i = 0; i < bars.length; i += 1000) {
+    accepted += lab.ingest({ timeframe: config.lab.baseTf, bars: bars.slice(i, i + 1000) }).accepted;
+    process.stdout.write(`\rNauka: ${Math.min(bars.length, i + 1000)} / ${bars.length} świec`);
   }
-  console.log(`\nHandel na papierze (ostatnie ${s.paper.n}): średnio ${n2(s.paper.avgR)} R na transakcję, t-stat ${n2(s.paper.tstat)} (wymagane ≥ ${config.ai.minTstat})`);
-  const t = s.trades;
-  console.log(`Podpowiedzi, które zostałyby pokazane: ${t.n} (TP ${t.wins}, SL ${t.losses}, czas ${t.timeouts}), średnio ${n2(t.avgR)} R, razem ${n2(t.totalR)} R`);
-  console.log(`\nTeraz: ${s.hint ? `${ACTION[s.hint.action]} – ${s.hint.why}` : 'za mało danych'}`);
-  if (!dry) console.log(`\nZapisano model: ${config.ai.file}`);
+  lab.flush();
+  const s = lab.snapshot();
+  const pct = (v) => (v === null || v === undefined ? '–' : `${(v * 100).toFixed(1)}%`);
+  const n2 = (v) => (v === null || v === undefined || !Number.isFinite(v) ? '–' : v.toFixed(2));
+
+  console.log(`\n\nNowe świece: ${accepted}, czas ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  console.log(`Próg dowodu przewagi: t-stat ≥ ${n2(s.threshold.tstat)} (poprawka na ${s.threshold.strategies} strategii)\n`);
+  console.log('Laboratorium strategii (wyniki tylko na danych, których model wcześniej nie widział):');
+  for (const st of s.strategies) {
+    const status = { learning: 'UCZY SIĘ', proven: 'PRZEWAGA', 'no-edge': 'brak przewagi' }[st.status];
+    const skill = (dir) => pct(st.models[dir].skill[st.models[dir].best]);
+    console.log(`  ${st.label.padEnd(42)} ${status.padEnd(14)} wyniki ${String(st.learned).padStart(6)} | skill K ${skill('long')} S ${skill('short')} | papier ${st.paper.n} trans., ${n2(st.paper.avgR)} R, t ${n2(st.paper.tstat)}`);
+  }
+  const l = s.ledger;
+  console.log(`\nDesk (podpowiedzi, które zostałyby pokazane): ${l.n} transakcji, TP ${l.wins}, SL ${l.losses}, czas ${l.timeouts}`);
+  console.log(`  średnio ${n2(l.avgR)} R, razem ${n2(l.totalR)} R, profit factor ${n2(l.profitFactor)}, max obsunięcie ${n2(l.maxDrawdownR)} R`);
+  console.log(`\nTeraz: ${ACTION[s.decision?.action] || 'CZEKAJ'} – ${s.decision?.why || 'za mało danych'}`);
+  if (!dry) console.log(`\nZapisano stan AI w: ${config.lab.dir}`);
 }
 
 main();

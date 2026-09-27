@@ -1,20 +1,24 @@
-// XauAiFeeder – cBot dla cTrader Automate.
+// XauAiFeeder v2 – cBot dla cTrader Automate.
 //
-// Wysyła zamknięte świece XAUUSD do XAU AI Advisor (POST /api/bars).
-// Przy starcie wysyła historię, żeby AI mogło się na niej nauczyć, potem
-// każdą nową zamkniętą świecę i co kilka sekund bieżącą cenę.
+// Wysyła do XAU AI Desk (POST /api/bars):
+//  - zamknięte świece XAUUSD (na start historię, potem każdą nową świecę),
+//  - zamknięte świece rynków powiązanych (domyślnie EURUSD, XAGUSD, USDJPY),
+//  - bieżącą cenę i spread złota,
+//  - saldo konta i parametry symbolu, żeby AI mogło policzyć wielkość pozycji.
+// Serwer w odpowiedzi podaje, jakie świece już ma, więc po restarcie lub
+// wyczyszczeniu pamięci AI cBot sam dośle brakującą historię.
 //
 // cBot NIE otwiera żadnych transakcji: tylko przesyła dane.
 //
 // Instalacja: cTrader -> Algo -> cBots -> New -> wklej ten plik -> Build.
 // Uruchom na wykresie XAUUSD i ustaw "Ingest token" taki jak INGEST_TOKEN w .env.
-// Przy starcie cTrader zapyta o zgodę na pełny dostęp (AccessRights.FullAccess):
-// jest potrzebny, żeby cBot mógł wysyłać dane przez HTTP do Twojego serwera.
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Net.Http;
 using System.Text;
+using System.Text.RegularExpressions;
 using cAlgo.API;
 
 namespace cAlgo.Robots
@@ -31,8 +35,11 @@ namespace cAlgo.Robots
         [Parameter("Timeframe (jak AI_TIMEFRAME)", DefaultValue = "Minute15")]
         public TimeFrame BarsTimeFrame { get; set; }
 
-        [Parameter("History bars", DefaultValue = 20000, MinValue = 200)]
+        [Parameter("History bars", DefaultValue = 100000, MinValue = 500)]
         public int HistoryBars { get; set; }
+
+        [Parameter("Related symbols", DefaultValue = "EURUSD,XAGUSD,USDJPY")]
+        public string RelatedSymbols { get; set; }
 
         [Parameter("Bars per request", DefaultValue = 1000, MinValue = 50, MaxValue = 5000)]
         public int ChunkBars { get; set; }
@@ -40,10 +47,19 @@ namespace cAlgo.Robots
         [Parameter("Price interval (s)", DefaultValue = 2, MinValue = 1)]
         public int IntervalSec { get; set; }
 
-        private static readonly HttpClient Client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        private Bars _bars;
+        private class Feed
+        {
+            public string Name;
+            public Bars Bars;
+            public int Digits;
+            public DateTime LastSent = DateTime.MinValue; // open time of the last bar the server has
+        }
+
+        private static readonly HttpClient Client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        private Feed _gold;
+        private readonly List<Feed> _aux = new List<Feed>();
         private string _tf;
-        private DateTime _lastSent = DateTime.MinValue; // open time of the last closed bar sent
+        private TimeSpan _span;
 
         protected override void OnStart()
         {
@@ -56,33 +72,56 @@ namespace cAlgo.Robots
             _tf = TimeFrameName(BarsTimeFrame);
             if (_tf == null)
             {
-                Log("obsługiwane interwały to Minute5, Minute15, Minute30, Hour, Hour4, Daily");
+                Log("obsługiwane interwały to Minute5, Minute15, Minute30, Hour, Hour4");
                 Stop();
                 return;
             }
+            _span = TimeFrameSpan(_tf);
             var name = SymbolName.ToUpperInvariant();
             if (!name.Contains("XAU") && !name.Contains("GOLD"))
                 Log("UWAGA – uruchom cBota na wykresie XAUUSD, teraz jest " + SymbolName);
 
-            _bars = MarketData.GetBars(BarsTimeFrame);
-            while (_bars.Count < HistoryBars + 1)
+            _gold = new Feed { Name = SymbolName, Bars = LoadBars(SymbolName), Digits = Symbol.Digits };
+            foreach (var raw in (RelatedSymbols ?? "").Split(','))
             {
-                if (_bars.LoadMoreHistory() <= 0) break; // broker has no older data
+                var sym = raw.Trim();
+                if (sym.Length == 0) continue;
+                if (!Symbols.Exists(sym))
+                {
+                    Log("broker nie ma symbolu " + sym + " – pomijam");
+                    continue;
+                }
+                _aux.Add(new Feed { Name = sym, Bars = LoadBars(sym), Digits = Symbols.GetSymbol(sym).Digits });
             }
-            Log("dostępne świece historii: " + (_bars.Count - 1));
 
-            SyncBars();
-            _bars.BarOpened += args => SyncBars(); // the previous bar has just closed
+            // Ask the server what it already has, then send only what is missing.
+            var hello = Post(Payload(null, null, ""));
+            if (hello != null) Reconcile(hello);
+            SyncAll();
+            _gold.Bars.BarOpened += args => SyncAll(); // the previous bar has just closed
             Timer.Start(TimeSpan.FromSeconds(IntervalSec));
         }
 
         protected override void OnTimer()
         {
-            // Retry bars that failed to send earlier; otherwise just send the price.
-            if (_bars.Count >= 2 && _bars.OpenTimes[_bars.Count - 2] > _lastSent)
-                SyncBars();
+            if (NeedsSync())
+                SyncAll(); // new bar or an earlier send failed
             else
-                Post(Payload(""));
+            {
+                var resp = Post(Payload(null, null, ""));
+                if (resp != null) Reconcile(resp);
+            }
+        }
+
+        private Bars LoadBars(string symbol)
+        {
+            var bars = MarketData.GetBars(BarsTimeFrame, symbol);
+            while (bars.Count < HistoryBars + 1)
+            {
+                if (bars.LoadMoreHistory() <= 0) break; // broker has no older data
+            }
+            Log(symbol + ": dostępne świece historii: " + bars.Count);
+            return bars;
         }
 
         private static string TimeFrameName(TimeFrame tf)
@@ -92,49 +131,147 @@ namespace cAlgo.Robots
             if (tf == TimeFrame.Minute30) return "M30";
             if (tf == TimeFrame.Hour) return "H1";
             if (tf == TimeFrame.Hour4) return "H4";
-            if (tf == TimeFrame.Daily) return "D1";
             return null;
         }
 
-        private string Num(double v)
+        private static TimeSpan TimeFrameSpan(string tf)
         {
-            return v.ToString("F" + Symbol.Digits, CultureInfo.InvariantCulture);
-        }
-
-        private string Payload(string bars)
-        {
-            return "{\"symbol\":\"" + SymbolName + "\",\"timeframe\":\"" + _tf + "\",\"price\":" + Num(Symbol.Bid) +
-                   ",\"bars\":[" + bars + "]}";
-        }
-
-        // Sends every closed bar newer than _lastSent, oldest first, in chunks.
-        // The last bar in the series is still forming, so it is never sent.
-        private void SyncBars()
-        {
-            int lastClosed = _bars.Count - 2;
-            int start = Math.Max(0, lastClosed + 1 - HistoryBars);
-            while (start <= lastClosed && _bars.OpenTimes[start] <= _lastSent) start++;
-
-            for (int i = start; i <= lastClosed; i += ChunkBars)
+            switch (tf)
             {
-                int end = Math.Min(lastClosed + 1, i + ChunkBars);
-                var sb = new StringBuilder();
-                for (int k = i; k < end; k++)
-                {
-                    if (k > i) sb.Append(',');
-                    long t = new DateTimeOffset(DateTime.SpecifyKind(_bars.OpenTimes[k], DateTimeKind.Utc)).ToUnixTimeSeconds();
-                    sb.Append('[').Append(t)
-                      .Append(',').Append(Num(_bars.OpenPrices[k]))
-                      .Append(',').Append(Num(_bars.HighPrices[k]))
-                      .Append(',').Append(Num(_bars.LowPrices[k]))
-                      .Append(',').Append(Num(_bars.ClosePrices[k]))
-                      .Append(',').Append(((long)_bars.TickVolumes[k]).ToString(CultureInfo.InvariantCulture))
-                      .Append(']');
-                }
-                if (!Post(Payload(sb.ToString()))) return; // try again on the next timer tick
-                _lastSent = _bars.OpenTimes[end - 1];
-                if (lastClosed + 1 - start > ChunkBars)
-                    Log("wysłano " + (end - start) + " z " + (lastClosed + 1 - start) + " świec historii");
+                case "M5": return TimeSpan.FromMinutes(5);
+                case "M15": return TimeSpan.FromMinutes(15);
+                case "M30": return TimeSpan.FromMinutes(30);
+                case "H1": return TimeSpan.FromHours(1);
+                default: return TimeSpan.FromHours(4);
+            }
+        }
+
+        // Index of the newest bar whose time is over (the last one may still be forming).
+        private int LastClosedIndex(Feed f)
+        {
+            int i = f.Bars.Count - 1;
+            while (i >= 0 && f.Bars.OpenTimes[i] + _span > Server.Time) i--;
+            return i;
+        }
+
+        private bool NeedsSync()
+        {
+            foreach (var f in AllFeeds())
+            {
+                int last = LastClosedIndex(f);
+                if (last >= 0 && f.Bars.OpenTimes[last] > f.LastSent) return true;
+            }
+            return false;
+        }
+
+        private IEnumerable<Feed> AllFeeds()
+        {
+            foreach (var f in _aux) yield return f;
+            yield return _gold;
+        }
+
+        // Related markets first, so the AI has them when the gold bar arrives.
+        private void SyncAll()
+        {
+            foreach (var f in _aux)
+                if (!SyncFeed(f, true)) return;
+            SyncFeed(_gold, false);
+        }
+
+        private bool SyncFeed(Feed f, bool isAux)
+        {
+            int last = LastClosedIndex(f);
+            int start = Math.Max(0, last + 1 - HistoryBars);
+            while (start <= last && f.Bars.OpenTimes[start] <= f.LastSent) start++;
+            int total = last + 1 - start;
+
+            for (int i = start; i <= last; i += ChunkBars)
+            {
+                int end = Math.Min(last + 1, i + ChunkBars);
+                string rows = Rows(f, i, end);
+                string resp = Post(isAux ? Payload(f.Name, rows, "") : Payload(null, null, rows));
+                if (resp == null) return false; // try again on the next timer tick
+                f.LastSent = f.Bars.OpenTimes[end - 1];
+                Reconcile(resp);
+                if (total > ChunkBars)
+                    Log(f.Name + ": wysłano " + (end - start) + " z " + total + " świec historii");
+            }
+            return true;
+        }
+
+        private string Rows(Feed f, int from, int to)
+        {
+            var sb = new StringBuilder();
+            string fmt = "F" + f.Digits;
+            for (int k = from; k < to; k++)
+            {
+                if (k > from) sb.Append(',');
+                long t = new DateTimeOffset(DateTime.SpecifyKind(f.Bars.OpenTimes[k], DateTimeKind.Utc)).ToUnixTimeSeconds();
+                sb.Append('[').Append(t)
+                  .Append(',').Append(f.Bars.OpenPrices[k].ToString(fmt, CultureInfo.InvariantCulture))
+                  .Append(',').Append(f.Bars.HighPrices[k].ToString(fmt, CultureInfo.InvariantCulture))
+                  .Append(',').Append(f.Bars.LowPrices[k].ToString(fmt, CultureInfo.InvariantCulture))
+                  .Append(',').Append(f.Bars.ClosePrices[k].ToString(fmt, CultureInfo.InvariantCulture))
+                  .Append(',').Append(((long)f.Bars.TickVolumes[k]).ToString(CultureInfo.InvariantCulture))
+                  .Append(']');
+            }
+            return sb.ToString();
+        }
+
+        private static string Num(double v)
+        {
+            if (double.IsNaN(v) || double.IsInfinity(v)) return "0";
+            return v.ToString("R", CultureInfo.InvariantCulture);
+        }
+
+        private static string Str(string s)
+        {
+            return "\"" + (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+        }
+
+        // Every payload lists all related symbols (with bars only for the one
+        // being sent), so the server reports what it has for each of them.
+        private string Payload(string auxName, string auxRows, string goldRows)
+        {
+            var sb = new StringBuilder();
+            sb.Append("{\"symbol\":").Append(Str(SymbolName));
+            sb.Append(",\"timeframe\":").Append(Str(_tf));
+            sb.Append(",\"price\":").Append(Num(Symbol.Bid));
+            sb.Append(",\"spread\":").Append(Num(Symbol.Spread));
+            sb.Append(",\"account\":{\"balance\":").Append(Num(Account.Balance))
+              .Append(",\"currency\":").Append(Str(Account.Asset.Name))
+              .Append(",\"lotSize\":").Append(Num(Symbol.LotSize))
+              .Append(",\"valuePerUnit\":").Append(Num(Symbol.PipValue / Symbol.PipSize))
+              .Append(",\"minUnits\":").Append(Num(Symbol.VolumeInUnitsMin))
+              .Append(",\"stepUnits\":").Append(Num(Symbol.VolumeInUnitsStep))
+              .Append('}');
+            sb.Append(",\"aux\":{");
+            bool first = true;
+            foreach (var f in _aux)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append(Str(f.Name)).Append(":[").Append(f.Name == auxName ? auxRows : "").Append(']');
+            }
+            sb.Append("},\"bars\":[").Append(goldRows ?? "").Append("]}");
+            return sb.ToString();
+        }
+
+        // The server answers {"last":{"XAUUSD":<ms>|null,"EURUSD":...}}: the
+        // newest bar it has stored per symbol. Behind us = its memory was
+        // cleared, so resend; ahead of us = we restarted, so skip what it has.
+        private void Reconcile(string resp)
+        {
+            foreach (var f in AllFeeds())
+            {
+                var m = Regex.Match(resp, "\"" + Regex.Escape(f.Name) + "\":(\\d+|null)");
+                if (!m.Success) continue;
+                DateTime server = m.Groups[1].Value == "null"
+                    ? DateTime.MinValue
+                    : DateTimeOffset.FromUnixTimeMilliseconds(long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)).UtcDateTime;
+                if (server < f.LastSent)
+                    Log(f.Name + ": serwer nie ma części świec – wysyłam je ponownie");
+                f.LastSent = server;
             }
         }
 
@@ -145,7 +282,7 @@ namespace cAlgo.Robots
             Print("{0}", "XauAiFeeder: " + message);
         }
 
-        private bool Post(string body)
+        private string Post(string body)
         {
             try
             {
@@ -155,17 +292,18 @@ namespace cAlgo.Robots
                     req.Content = new StringContent(body, Encoding.UTF8, "application/json");
                     using (var res = Client.SendAsync(req).GetAwaiter().GetResult())
                     {
-                        if (res.IsSuccessStatusCode) return true;
-                        Log("HTTP " + (int)res.StatusCode + " " + res.Content.ReadAsStringAsync().GetAwaiter().GetResult());
-                        return false;
+                        string text = res.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                        if (res.IsSuccessStatusCode) return text;
+                        Log("HTTP " + (int)res.StatusCode + " " + text);
+                        return null;
                     }
                 }
             }
             catch (Exception e)
             {
                 Log("brak połączenia z serwerem (" + ServerUrl + "): " + e.GetBaseException().Message +
-                      " – czy uruchomiłeś npm start?");
-                return false;
+                    " – czy uruchomiłeś start.bat?");
+                return null;
             }
         }
     }

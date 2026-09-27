@@ -1,110 +1,138 @@
-# XAU AI Advisor
+# XAU AI Desk
 
-Twój własny, samouczący się doradca AI do handlu złotem (**XAUUSD**). Uczy się bez przerwy na prawdziwych świecach z Twojego **cTradera** (albo MetaTradera 5) i podpowiada **KUPNO / SPRZEDAŻ / CZEKAJ** razem z poziomem wejścia, stop lossem i take profitem.
+Samouczący się desk tradingowy dla złota (**XAUUSD**). Uczy się bez przerwy na prawdziwych danych z Twojego **cTradera**, testuje równolegle kilka strategii i podpowiada **KUPNO / SPRZEDAŻ / CZEKAJ** z wejściem, stop lossem, take profitem i **wielkością pozycji w lotach**.
 
-Działa jak systemy wspomagania decyzji w instytucjach: model uczy się na danych, jego skuteczność jest stale mierzona na danych, których wcześniej nie widział, a sygnał trafia do człowieka dopiero wtedy, gdy model udowodni przewagę. Decyzję o transakcji podejmujesz Ty. System niczego nie otwiera sam.
+Działa na zasadach, na których pracują systemy w instytucjach:
+- modele uczą się na danych,
+- skuteczność jest mierzona wyłącznie na danych, których model wcześniej nie widział,
+- strategia musi udowodnić przewagę statystycznie (z poprawką na testowanie wielu strategii naraz),
+- warstwa zarządzania ryzykiem decyduje, czy sygnał w ogóle trafi do człowieka.
 
-## Jak to działa
+Decyzję o transakcji podejmujesz Ty. System niczego nie otwiera sam.
+
+## Architektura
 
 ```
-cTrader (cBot XauAiFeeder) ──świece + cena──▶ serwer AI ──▶ przeglądarka (podpowiedzi, skuteczność, powiadomienia)
-                                           │
-                                           └─ data/model-XAUUSD-M15.json (pamięć modelu)
+cTrader (cBot XauAiFeeder)
+  │  świece M15: XAUUSD + EURUSD, XAGUSD, USDJPY · cena · spread · saldo konta
+  ▼
+Laboratorium strategii ── M15 → H1, H4 (agregacja)
+  │  6 strategii (interwał × profil SL/TP), każda z własnymi modelami:
+  │    sieć neuronowa · drzewa gradientowe (GBDT) · regresja logistyczna · zespół
+  │  ocena każdej prognozy przed nauką → handel na papierze → dowód przewagi
+  ▼
+Desk ── wybór strategii, konflikty, wielkość pozycji, blokady ryzyka, 1 pozycja naraz
+  ▼
+Przeglądarka: decyzja, wyniki (krzywa kapitału w R), laboratorium, dane · powiadomienia
 ```
 
-1. **Dane.** cBot `ctrader/XauAiFeeder.cs` (albo EA `mt5/XauAiFeeder.mq5`) przy starcie wysyła historię (domyślnie 20 000 świec M15, czyli około 10 miesięcy), a potem każdą nową zamkniętą świecę i bieżącą cenę.
-2. **Cechy rynku.** Dla każdej świecy AI liczy 17 cech: ruch ceny z 1/4/16/64 świec, RSI, odległość od EMA20/EMA50 i ich nachylenie, zmienność (ATR) teraz względem średniej, pozycję w zakresie 50 świec, odchylenie Bollingera, wolumen tickowy i porę dnia (sesja azjatycka, londyńska, nowojorska). Odległości są liczone w ATR, więc model działa tak samo przy złocie po 1800 $ i po 5000 $.
-3. **Modele AI.** Trzy modele osobno dla KUPNA i SPRZEDAŻY szacują szansę, że transakcja dojdzie do TP przed SL:
-   - **regresja logistyczna** (stabilna, szybko łapie proste zależności),
-   - **sieć neuronowa** (warstwa ukryta z 16 neuronami, łapie zależności nieliniowe, np. „RSI skrajny, ale tylko w silnym trendzie”),
-   - **zespół** (średnia obu).
-   Używany jest ten, który ostatnio przewidywał najlepiej.
-4. **Ciągła nauka.** Każda prognoza jest zapisywana. Gdy rynek pokaże wynik (TP, SL albo koniec czasu), AI porównuje go ze swoją prognozą i dopiero wtedy się na nim uczy. Model uczy się więc z każdą świecą, nigdy nie przestaje i dopasowuje się, gdy rynek zmienia charakter. Wiedza jest zapisywana na dysku i przetrwa restart.
-5. **Bramka bezpieczeństwa.** AI podpowiada transakcję tylko wtedy, gdy spełnione są wszystkie warunki:
-   - przeszło okres nauki (`AI_MIN_SAMPLES` wyników),
-   - szansa na TP przekracza próg opłacalności (po uwzględnieniu spreadu) o `AI_MIN_EDGE`,
-   - jego **handel na papierze** jest zyskowny w sposób statystycznie istotny. Handel na papierze to symulowane transakcje na nowych danych, ze spreadem i bez pieniędzy. Warunek sprawdza t-stat ≥ `AI_MIN_TSTAT` na ostatnich 100 transakcjach.
+### Dane
+cBot `ctrader/XauAiFeeder.cs` wysyła:
+- świece M15 złota i trzech rynków powiązanych: **EURUSD** jako miara dolara, **XAGUSD** (srebro), **USDJPY** (rentowności/ryzyko),
+- bieżącą cenę i spread złota,
+- saldo konta i parametry symbolu.
 
-   W przeciwnym razie mówi **CZEKAJ** i wyjaśnia dlaczego. Na rynku bez wzorca (czysty przypadek) AI nie da ani jednego sygnału, co sprawdzają testy.
+Na start wysyła do 100 000 świec historii (ok. 4 lata M15). Serwer w każdej odpowiedzi podaje, jakie świece już ma. Po restarcie cBot nie wysyła więc wszystkiego od nowa, a po wyczyszczeniu pamięci AI sam dośle całą historię.
+
+### Cechy rynku (26)
+- **Momentum i trend:** ruch z 1/4/16/64 świec, EMA20/EMA50 i ich nachylenie, odległość od SMA200.
+- **Oscylatory i zmienność:** RSI, Bollinger, ATR teraz względem średniej, wielkość świecy, wolumen tickowy.
+- **Poziomy dnia:** pozycja w dzisiejszym zakresie i względem wczorajszego high/low.
+- **Pora dnia:** sesja azjatycka, londyńska, nowojorska.
+- **Rynki powiązane:** ruch EURUSD, srebra i USDJPY w ostatniej świecy i w ostatnich 4 świecach, mierzony w ich własnej zmienności.
+
+Wszystko jest liczone tylko z przeszłości (sprawdzają to testy), a odległości cenowe w jednostkach ATR.
+
+### Modele
+Każda strategia ma osobne modele dla KUPNA i SPRZEDAŻY. Każdy szacuje szansę, że transakcja dojdzie do TP przed SL:
+
+| Model | Jak się uczy | Mocna strona |
+|---|---|---|
+| **Drzewa gradientowe (GBDT)**, ta sama rodzina co XGBoost/LightGBM | co ok. 10 dni rynku trening od nowa na ostatnich 4000 wynikach | zależności nieliniowe, progi, interakcje cech |
+| **Sieć neuronowa** (26 → 16 → 1) | po każdej świecy (online) | szybka adaptacja, nieliniowość |
+| **Regresja logistyczna** | po każdej świecy (online) | stabilność, odporność na szum |
+| **Zespół** | średnia powyższych | zwykle najrówniejszy |
+
+Używany jest model, który na ostatnich 1000 wynikach przewidywał najlepiej, mierzone jako przewaga nad zgadywaniem średniej.
+
+### Dowód przewagi (governance)
+1. Każda prognoza jest zapisywana, a gdy rynek pokaże wynik (TP, SL albo koniec czasu), najpierw jest oceniana, a dopiero potem model się na niej uczy. Wszystkie statystyki pochodzą więc z danych, których model nie widział.
+2. Strategia handluje **na papierze**, czyli symuluje transakcje ze spreadem, bez pieniędzy, jedną naraz. Do desku trafia dopiero, gdy spełni wszystkie warunki:
+   - ma co najmniej 50 transakcji papierowych,
+   - średni wynik ostatnich (do 250) transakcji jest dodatni,
+   - t-stat tego wyniku przekracza próg,
+   - wynik z całej historii strategii też jest na plusie.
+3. **Poprawka na wielokrotne testowanie (Bonferroni).** Im więcej strategii testujemy, tym łatwiej o jedną, która „wygrała” przypadkiem. Dlatego bazowy próg `AI_MIN_TSTAT = 1,5` jest automatycznie podnoszony. Przy 6 strategiach wynosi 2,29.
+
+W testach na rynku czysto losowym desk przez półtora roku danych praktycznie milczy. Na rynku z prawdziwym wzorcem znajduje go i zarabia na danych, których nie widział.
+
+### Desk i ryzyko
+- Z sygnałów bieżącej świecy desk wybiera strategię z najmocniejszym dowodem. Pozostałe zgodne pokazuje jako potwierdzenia, a przy **sprzecznych sygnałach** każe czekać.
+- **Wielkość pozycji:** liczona z salda konta, ryzyka `AI_RISK_PCT` (domyślnie 1%) i odległości do SL. Działa w walucie Twojego konta (np. PLN), bo cBot przesyła wartość punktu.
+- **Blokada spreadu:** brak sygnałów, gdy spread przekracza `AI_MAX_SPREAD_X` × zakładany koszt, np. przy newsach.
+- **Dzienny limit straty:** po stracie `AI_DAILY_LOSS_R` (domyślnie 3R) desk przestaje podpowiadać do końca dnia.
+- **Jedna pozycja naraz:** wynik każdej podpowiedzi trafia do wyników desku (krzywa kapitału w R, profit factor, maksymalne obsunięcie).
 
 ## Uruchomienie
 
-**Najprościej (Windows):** zainstaluj Node.js LTS z https://nodejs.org, a potem kliknij dwukrotnie `start.bat`. Plik sam utworzy ustawienia, wygeneruje token (wyświetli go w czarnym oknie), uruchomi AI i otworzy przeglądarkę. Okno musi zostać otwarte, dopóki AI ma działać.
+**Windows:** zainstaluj Node.js LTS z https://nodejs.org i kliknij dwukrotnie `start.bat`. Plik utworzy ustawienia, wygeneruje token (wyświetli go w czarnym oknie), uruchomi AI i otworzy przeglądarkę. Okno musi zostać otwarte, dopóki AI ma działać. Zamknięcie okna lub Ctrl+C zapisuje pamięć AI.
 
-Ręcznie: wymagany Node.js 18+. Brak zależności npm: sieć neuronowa i cała reszta są napisane od zera.
+Ręcznie (Node.js 18+, brak zależności npm):
 
 ```bash
-cp .env.example .env      # ustaw INGEST_TOKEN (długi losowy ciąg)
+cp .env.example .env      # ustaw INGEST_TOKEN
 npm start                 # http://localhost:3000
 npm test
 ```
 
 ### Podłączenie cTradera
 
-1. Otwórz cTrader → zakładka **Algo** → **cBots** → **New** (nowy cBot). Usuń cały przykładowy kod i wklej zawartość pliku `ctrader/XauAiFeeder.cs`, potem kliknij **Build**.
-2. Otwórz wykres **XAUUSD** i dodaj do niego cBota **XauAiFeeder** (przycisk „+” przy cBocie → instancja na XAUUSD).
-3. Ustaw parametry:
-   - `Ingest token`: ten sam ciąg co `INGEST_TOKEN` w `.env`,
-   - `Timeframe`: **Minute15** (musi pasować do `AI_TIMEFRAME=M15`; dla H1 wybierz `Hour`),
-   - `Server URL`: zostaw `http://127.0.0.1:3000/api/bars`, jeśli serwer działa na tym samym komputerze.
-4. Uruchom cBota (▶). cTrader zapyta o **pełny dostęp** (Full Access). Zgoda jest potrzebna, bo cBot wysyła dane przez HTTP do Twojego serwera. cBot niczego nie kupuje ani nie sprzedaje.
-5. W zakładce **Log** zobaczysz, ile świec historii jest dostępnych i jak idzie wysyłanie. AI uczy się na nich od razu.
+1. cTrader → **Algo** → **cBots** → **New**. Usuń przykładowy kod, wklej całą zawartość `ctrader/XauAiFeeder.cs` i kliknij **Build**.
+2. Dodaj instancję cBota na **XAUUSD** i ustaw parametry:
+   - `Ingest token`: token z czarnego okna,
+   - `Timeframe`: **Minute15**,
+   - `History bars`: 100000,
+   - `Related symbols`: EURUSD,XAGUSD,USDJPY.
+3. Uruchom (▶) i zgódź się na **pełny dostęp**, potrzebny do wysyłania danych przez HTTP do Twojego serwera.
+4. W zakładce **Log** zobaczysz, ile historii ma broker i jak idzie wysyłanie. Pierwsza nauka na 100 000 świec trwa ok. 2 minuty.
 
-Wskazówki:
-- Działa z cTraderem na komputerze (Windows/Mac). cTrader Web i mobilny nie uruchamiają cBotów przez noc; do ciągłej nauki cTrader musi być włączony, tak samo jak serwer (`npm start`).
-- Jeśli broker udostępnia mniej historii niż 20 000 świec, cBot wyśle tyle, ile jest. Zwykle to i tak kilka miesięcy M15.
-- Konto demo wystarczy: cBot tylko czyta ceny.
+Jeśli broker nie ma któregoś symbolu powiązanego, cBot go pominie, a AI potraktuje te cechy jako puste. Do ciągłej nauki cTrader (wersja na komputer) i `start.bat` muszą działać jednocześnie.
 
-### Podłączenie MT5 (alternatywa)
+### MT5 (alternatywa)
+`mt5/XauAiFeeder.mq5` wysyła tylko świece złota i cenę, bez rynków powiązanych i danych konta, więc bez wielkości pozycji. Instalacja: skopiuj do `MQL5/Experts`, skompiluj, dodaj adres serwera w *Narzędzia → Opcje → Doradcy Expert → WebRequest*, uruchom na XAUUSD M15.
 
-1. Skopiuj `mt5/XauAiFeeder.mq5` do `MQL5/Experts` i skompiluj w MetaEditorze.
-2. *Narzędzia → Opcje → Doradcy Expert → Zezwalaj na WebRequest* i dodaj `http://127.0.0.1:3000`.
-3. Przeciągnij EA na wykres **XAUUSD**. Ustaw `IngestToken` (ten sam co w `.env`) i `Timeframe` (ten sam co `AI_TIMEFRAME`, domyślnie M15).
-4. W zakładce „Eksperci” zobaczysz postęp wysyłania historii. AI uczy się na niej od razu, a po chwili w przeglądarce widać wynik nauki.
-
-Jeśli terminal ma mało historii, przewiń wykres M15 mocno w lewo (MT5 dociągnie dane) albo zwiększ *Maks. słupków na wykresie* w opcjach.
-
-### Nauka z pliku CSV (opcjonalnie)
-
-Zwykle niepotrzebne, bo cBot sam wysyła historię. Jeśli masz dłuższą historię w CSV (np. wyeksportowaną z MT5: *Widok → Symbole → Słupki → Eksportuj*), możesz od razu nauczyć na niej model:
+### Nauka z CSV (opcjonalnie)
 
 ```bash
-npm run train -- XAUUSD_M15.csv --dry              # tylko test: raport skuteczności, model bez zmian
-npm run train -- XAUUSD_M15.csv --utc-offset=3     # nauka i zapis do modelu (plik w czasie brokera UTC+3)
+npm run train -- XAUUSD_M15.csv --dry              # raport laboratorium, pamięć AI bez zmian
+npm run train -- XAUUSD_M15.csv --utc-offset=3     # nauka i zapis (plik w czasie brokera UTC+3)
 ```
 
-Raport pokazuje skuteczność liczoną uczciwie: każda świeca jest najpierw prognozowana, a dopiero potem model się na niej uczy. Zatrzymaj serwer przed nauką z CSV, bo oba zapisują ten sam plik modelu.
-
-## Jak czytać ekran
-
-- **Podpowiedź AI**: KUPNO / SPRZEDAŻ / CZEKAJ, wejście, SL, TP, ryzyko w $/oz i oczekiwany wynik w R. Paski pokazują szansę na TP dla obu kierunków, a pionowa kreska to próg opłacalności. Poniżej widać, które cechy rynku najbardziej wpłynęły na ocenę.
-- **Nauka modelu**: ile świec i wyników AI przerobiło. **Przewaga nad zgadywaniem** porównuje błąd prognoz modelu z błędem prostego zgadywania średniej: wartość > 0% oznacza, że model naprawdę coś wie. Pogrubiony jest model używany teraz.
-- **Skuteczność podpowiedzi**: każda podpowiedź, którą AI pokazało, i jej prawdziwy wynik w **R** (wielokrotność ryzyka: +1,5 R to TP, −1 R to SL, spread odjęty).
-
-Włącz powiadomienia w przeglądarce, a dostaniesz alert przy każdym nowym sygnale.
+Plik CSV zawiera tylko złoto, więc cechy rynków powiązanych będą puste. Przed nauką z CSV zatrzymaj serwer.
 
 ## Ustawienia (`.env`)
 
 | Zmienna | Domyślnie | Znaczenie |
 |---|---|---|
-| `AI_TIMEFRAME` | `M15` | Interwał świec (M5, M15, M30, H1, H4); taki sam w cBocie (Minute15, Hour…) |
-| `AI_HORIZON_BARS` | `16` | Maksymalny czas transakcji w świecach (16 × M15 = 4 h) |
-| `AI_SL_ATR` / `AI_TP_ATR` | `1.0` / `1.5` | SL i TP w wielokrotnościach ATR(14) |
+| `AI_TIMEFRAME` | `M15` | Interwał świec z cBota; H1/H4 AI buduje samo |
+| `AI_STRATEGIES` | 6 strategii | `INTERWAŁ:SL_ATR:TP_ATR:MAKS_ŚWIEC`, po przecinku |
+| `AI_AUX_SYMBOLS` | `EURUSD,XAGUSD,USDJPY` | Rynki powiązane (maks. 3), te same co w cBocie |
 | `AI_COST_USD` | `0.35` | Spread + prowizja na uncję. Wpisz wartość swojego brokera |
-| `AI_MIN_SAMPLES` | `1000` | Okres nauki przed pierwszą podpowiedzią |
+| `AI_MIN_SAMPLES` | `1000` | Wyniki do przerobienia, zanim strategia może podpowiadać |
 | `AI_MIN_EDGE` | `0.05` | Wymagana przewaga szansy nad progiem opłacalności |
-| `AI_MIN_TSTAT` | `1.5` | Jak pewny musi być zysk na papierze (wyżej = mniej sygnałów, ale pewniejsze) |
+| `AI_MIN_TSTAT` | `1.5` | Bazowy próg dowodu (podnoszony o poprawkę na liczbę strategii) |
+| `AI_RISK_PCT` | `1` | Ryzyko na transakcję w % salda |
+| `AI_DAILY_LOSS_R` | `3` | Dzienny limit straty w R |
+| `AI_MAX_SPREAD_X` | `2` | Blokada, gdy spread > tyle × `AI_COST_USD` |
 
-Zmiana interwału, SL/TP, horyzontu lub kosztu oznacza, że stare lekcje przestają pasować. Model uczy się wtedy od nowa na zapisanych świecach (albo, przy zmianie interwału, na nowej historii z cTradera lub MT5).
+Pamięć AI jest w folderze `data/`. Dodana albo zmieniona strategia uczy się automatycznie na zapisanej historii. Usunięcie folderu `data/` oznacza naukę od zera: cBot sam dośle historię.
 
 ## Uczciwie o możliwościach
 
-- To prawdziwe uczenie maszynowe, ale nie ma magii. Rynek złota jest w dużej mierze losowy, a przewaga nawet najlepszych funduszy jest mała. Dlatego system mierzy swoją skuteczność i milczy, gdy jej nie ma. Długie okresy z samym „CZEKAJ” są normalne i świadczą o tym, że zabezpieczenia działają.
-- Skuteczność jest liczona na świecach zamknięcia (TP/SL sprawdzane po high/low świecy; gdy świeca dotknie obu, liczy się strata). Realny poślizg i zmienny spread przy newsach mogą pogorszyć wynik.
-- Model nie zna kalendarza makro (NFP, FOMC, CPI). W dniu ważnych danych zachowaj szczególną ostrożność.
-- W MT5 czas świec jest przeliczany z czasu brokera na UTC według bieżącego przesunięcia, więc historia sprzed zmiany czasu letniego/zimowego może być przesunięta o godzinę (w cTraderze tego problemu nie ma).
-- cBot i EA nie były kompilowane w tym środowisku (brak cTradera i MetaEditora). Przy pierwszym uruchomieniu sprawdź zakładkę Log w cTraderze (albo „Eksperci” w MT5). Format danych, które wysyłają, jest sprawdzony testami serwera.
-- cBot pobiera czasy świec w UTC (`TimeZone = UTC`), więc godziny sesji są liczone poprawnie przez cały rok.
-- Aplikacja domyślnie działa tylko na Twoim komputerze (127.0.0.1). Żeby udostępnić ją w sieci, ustaw `HOST=0.0.0.0` i koniecznie mocny `INGEST_TOKEN`.
+- To prawdziwe uczenie maszynowe, ale nie ma magii. Rynek złota jest w dużej mierze losowy, a przewaga nawet dużych funduszy jest niewielka. Dlatego system mierzy swoją skuteczność i milczy, gdy jej nie ma. Długie okresy „CZEKAJ” to znak, że zabezpieczenia działają.
+- Wyniki są liczone na świecach: TP/SL sprawdzane po high/low, a gdy świeca dotknie obu, liczy się strata. Realny poślizg i zmienny spread przy newsach mogą je pogorszyć.
+- AI nie zna kalendarza makro (NFP, FOMC, CPI). Blokada spreadu łapie część takich momentów, ale nie wszystkie.
+- cBot nie był kompilowany w środowisku, w którym powstał kod. Jeśli cTrader zgłosi błąd przy Build, skopiuj jego treść.
+- Aplikacja domyślnie działa tylko na Twoim komputerze (127.0.0.1).
 
 > To narzędzie informacyjne, nie porada inwestycyjna. AI może się mylić, a wyniki historyczne nie gwarantują przyszłych zysków. CFD na złoto niosą wysokie ryzyko utraty kapitału. Zacznij od konta demo.

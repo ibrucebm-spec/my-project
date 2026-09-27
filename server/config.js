@@ -25,15 +25,17 @@ module.exports = {
   // Local machine only by default; set HOST=0.0.0.0 to expose on the network.
   host: process.env.HOST || '127.0.0.1',
   ingestToken: process.env.INGEST_TOKEN || '',
-  ai: {
-    timeframe,
-    horizon: num(process.env.AI_HORIZON_BARS, 16),
-    slAtr: num(process.env.AI_SL_ATR, 1.0),
-    tpAtr: num(process.env.AI_TP_ATR, 1.5),
+  lab: {
+    baseTf: timeframe,
+    strategies: process.env.AI_STRATEGIES || undefined,
+    auxSymbols: process.env.AI_AUX_SYMBOLS !== undefined ? process.env.AI_AUX_SYMBOLS : undefined,
+    costUsd: num(process.env.AI_COST_USD, 0.35),
     minEdge: num(process.env.AI_MIN_EDGE, 0.05),
     minTstat: num(process.env.AI_MIN_TSTAT, 1.5),
     minSamples: num(process.env.AI_MIN_SAMPLES, 1000),
-    costUsd: num(process.env.AI_COST_USD, 0.35),
-    file: path.join(__dirname, '..', 'data', `model-XAUUSD-${timeframe}.json`),
+    riskPct: num(process.env.AI_RISK_PCT, 1),
+    dailyLossR: num(process.env.AI_DAILY_LOSS_R, 3),
+    maxSpreadMult: num(process.env.AI_MAX_SPREAD_X, 2),
+    dir: path.join(__dirname, '..', 'data'),
   },
 };

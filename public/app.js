@@ -3,7 +3,7 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (n, d = 2) => (typeof n === 'number' && isFinite(n) ? n.toLocaleString('pl-PL', { minimumFractionDigits: d, maximumFractionDigits: d }) : '–');
   const pct = (n, d = 0) => (typeof n === 'number' && isFinite(n) ? `${fmt(n * 100, d)}%` : '–');
-  const signed = (n, d = 2) => (typeof n === 'number' && isFinite(n) ? `${n >= 0 ? '+' : ''}${fmt(n, d)}` : '–');
+  const signed = (n, d = 2) => (typeof n === 'number' && isFinite(n) ? `${n >= 0 ? '+' : '−'}${fmt(Math.abs(n), d)}` : '–');
   const ago = (iso) => {
     const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
     if (s < 60) return `${Math.floor(s)} s`;
@@ -14,6 +14,12 @@
   const time = (iso) => new Date(iso).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   const ACTION = { long: 'KUPNO', short: 'SPRZEDAŻ', wait: 'CZEKAJ' };
   const RESULT = { tp: 'TP', sl: 'SL', time: 'czas' };
+  const STATUS = {
+    learning: ['uczy się', 'st-learning'],
+    'no-edge': ['brak przewagi', 'st-noedge'],
+    proven: ['przewaga udowodniona', 'st-proven'],
+  };
+  const MODEL_SHORT = { linear: 'regresja', mlp: 'sieć neuronowa', gbdt: 'GBDT', ensemble: 'zespół' };
   const storage = {
     get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -36,22 +42,29 @@
     const p = await Notification.requestPermission();
     $('notify-btn').textContent = p === 'granted' ? 'Powiadomienia włączone' : 'Powiadomienia zablokowane';
   };
+  if ('Notification' in window && Notification.permission === 'granted') $('notify-btn').textContent = 'Powiadomienia włączone';
 
   let state = null;
   let lastStateAt = 0;
   let lastPrice = null;
 
-  function renderPrice() {
+  function renderHeader(lab) {
     const el = $('price');
     const p = state.price;
     el.textContent = typeof p === 'number' ? fmt(p) : '–';
     el.classList.toggle('stale', !!state.priceStale);
-    $('price-note').textContent = typeof p !== 'number' ? 'brak danych z platformy' : state.priceStale ? `nieaktualna (${ago(state.priceAt)})` : '';
+    $('price-note').textContent = typeof p !== 'number' ? 'brak danych z cTradera' : state.priceStale ? `nieaktualna (${ago(state.priceAt)})` : '';
     if (typeof p === 'number' && p !== lastPrice) {
       el.classList.toggle('up', lastPrice !== null && p > lastPrice);
       el.classList.toggle('down', lastPrice !== null && p < lastPrice);
       lastPrice = p;
     }
+    const sp = lab.live.spread;
+    const wide = typeof sp === 'number' && sp > lab.params.maxSpreadMult * lab.params.costUsd;
+    $('spread').textContent = typeof sp === 'number' ? `${fmt(sp)} $` : '–';
+    $('spread').className = wide ? 'neg' : '';
+    const acc = lab.live.account;
+    $('balance').textContent = acc ? `${fmt(acc.balance)} ${acc.currency}` : '–';
   }
 
   function probRow(label, p, be) {
@@ -63,106 +76,217 @@
     </div>`;
   }
 
-  function renderHint(ai) {
-    const h = ai.hint;
-    $('hint-time').textContent = h ? `świeca ${ai.timeframe} z ${time(h.barTime)}` : '';
-    if (!h) {
-      $('hint').innerHTML = `<p class="empty">Czekam na dane z cTradera. AI potrzebuje co najmniej 120 świec, żeby zacząć (teraz ${ai.bars}). Uruchom cBota <b>XauAiFeeder</b> na wykresie XAUUSD (README).</p>`;
+  function renderDecision(lab) {
+    const d = lab.decision;
+    $('decision-time').textContent = d ? `po świecy ${lab.baseTf} z ${time(d.barTime)}` : '';
+    if (!d) {
+      $('decision').innerHTML = `<p class="empty">Czekam na dane z cTradera. Uruchom cBota <b>XauAiFeeder</b> na wykresie XAUUSD (README).</p>`;
       return;
     }
-    const act = h.action;
-    const lv = act === 'wait' ? null : h[act];
-    const levels = lv ? `<div class="levels">
-        <div><span>Wejście</span><b>${fmt(h.entry)}</b></div>
-        <div><span>Stop loss</span><b class="neg">${fmt(lv.sl)}</b></div>
-        <div><span>Take profit</span><b class="pos">${fmt(lv.tp)}</b></div>
-        <div><span>Ryzyko</span><b>${fmt(Math.abs(h.entry - lv.sl))} $/oz</b></div>
-        <div><span>Oczekiwany wynik</span><b>${signed(act === 'long' ? h.evLong : h.evShort)} R</b></div>
-      </div>` : '';
-    const dirWord = h.direction === 'long' ? 'KUPNA' : 'SPRZEDAŻY';
-    const reasons = h.reasons.length
-      ? `<div class="reasons"><div class="muted small">Co najbardziej wpływa na ocenę ${dirWord} (${esc(h.modelLabel)}):</div><ul>${h.reasons
+    const act = d.action;
+    const parts = [`<div class="action ${act}">${ACTION[act]}</div>`, `<p class="why">${esc(d.why)}</p>`];
+    if (act !== 'wait') {
+      const z = d.sizing;
+      const size = !z ? '<b>–</b><small>brak danych konta</small>'
+        : z.ok ? `<b>${fmt(z.lots, z.lots < 0.1 ? 3 : 2)} lota</b><small>ryzyko ${fmt(z.riskMoney)} ${esc(z.currency)} (${fmt(z.riskPct, 1)}%)</small>`
+          : `<b class="neg">za małe konto</b><small>${esc(z.note)}</small>`;
+      parts.push(`<div class="levels">
+        <div><span>Wejście</span><b>${fmt(d.entry)}</b></div>
+        <div><span>Stop loss</span><b class="neg">${fmt(d.sl)}</b></div>
+        <div><span>Take profit</span><b class="pos">${fmt(d.tp)}</b></div>
+        <div><span>Wielkość pozycji</span>${size}</div>
+        <div><span>Oczekiwany wynik</span><b>${signed(d.ev)} R</b><small>RR 1:${fmt(d.rr, 1)}</small></div>
+      </div>`);
+      parts.push(`<div class="probs">${probRow('Szansa na TP', d.p, d.breakeven)}
+        <div class="muted small">Pionowa kreska to próg opłacalności (${pct(d.breakeven)}) po uwzględnieniu spreadu. Podpowiedź ważna do ${time(d.validUntil)}, potem cena odjedzie od wejścia.</div></div>`);
+      parts.push(`<div class="meta">Strategia: <b>${esc(d.strategyLabel)}</b> · model: ${esc(d.model)} · papier: ${d.paper.n} transakcji, ${signed(d.paper.avgR)} R, t-stat ${fmt(d.paper.tstat)}</div>`);
+      if (d.confirmations?.length) parts.push(`<div class="meta">Potwierdzają: ${d.confirmations.map(esc).join('; ')}</div>`);
+    }
+    if (d.blocked) {
+      parts.push(`<div class="guard"><b>Zablokowany sygnał ${ACTION[d.blocked.action]}:</b><ul>${d.blocked.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`);
+    }
+    if (d.reasons?.length) {
+      parts.push(`<div class="reasons"><div class="muted small">Co najbardziej wpływa na ocenę AI:</div><ul>${d.reasons
         .map((r) => `<li><span class="${r.effect > 0 ? 'pos' : 'neg'}">${r.effect > 0 ? '▲ wspiera' : '▼ przeciw'}</span> ${esc(r.label)}</li>`)
-        .join('')}</ul></div>`
-      : '';
-    $('hint').innerHTML = `
-      <div class="action ${act}">${ACTION[act]}</div>
-      <p class="why">${esc(h.why)}</p>
-      ${levels}
-      <div class="probs">
-        ${probRow('Szansa TP dla KUPNA', h.pLong, h.breakeven)}
-        ${probRow('Szansa TP dla SPRZEDAŻY', h.pShort, h.breakeven)}
-        <div class="muted small">Pionowa kreska to próg opłacalności (${pct(h.breakeven)}): poniżej niego transakcja statystycznie traci po uwzględnieniu spreadu.</div>
-      </div>
-      ${reasons}`;
+        .join('')}</ul></div>`);
+    }
+    const o = lab.open;
+    if (o && !d.committed) { // an earlier hint is still running
+      parts.push(`<div class="open-note">Poprzednia podpowiedź desku jest w toku: <b class="${o.side === 'long' ? 'buy' : 'sell'}">${ACTION[o.side]}</b> od ${fmt(o.entry)} (SL ${fmt(o.sl)}, TP ${fmt(o.tp)}), ${esc(o.label)}.</div>`);
+    }
+    $('decision').innerHTML = parts.join('');
   }
 
-  function renderLearning(ai) {
-    const prog = Math.min(1, ai.learned / ai.minSamples);
-    const models = ['long', 'short'].map((dir) => {
-      const m = ai.models[dir];
-      return `<tr><td>${dir === 'long' ? 'KUPNO' : 'SPRZEDAŻ'}</td>${['linear', 'mlp', 'ensemble']
-        .map((k) => `<td class="${m.best === k ? 'best' : ''} ${m.skill[k] > 0 ? 'pos' : m.skill[k] < 0 ? 'neg' : ''}">${m.skill[k] === null ? '–' : signed(m.skill[k] * 100, 1) + '%'}</td>`)
-        .join('')}<td>${pct(m.baseRate)}</td></tr>`;
-    }).join('');
-    const pp = ai.paper;
-    $('learning').innerHTML = `
-      <div class="kv"><span>Świece w pamięci</span><b>${ai.bars.toLocaleString('pl-PL')}</b></div>
-      <div class="kv"><span>Ostatnia świeca</span><b>${ai.lastBarTime ? `${time(ai.lastBarTime)} (${ago(ai.lastBarTime)} temu)` : '–'}</b></div>
-      <div class="kv"><span>Wyniki, z których AI się nauczyło</span><b>${ai.learned.toLocaleString('pl-PL')}</b></div>
-      <div class="bar"><span style="width:${prog * 100}%"></span></div>
-      <div class="muted small">${ai.ready ? 'Model przeszedł okres nauki i może podpowiadać.' : `Okres nauki: ${ai.learned} / ${ai.minSamples}. Do tego czasu AI nie daje podpowiedzi.`}</div>
-      <h3>Przewaga modeli nad zgadywaniem</h3>
-      <div class="table-wrap"><table>
-        <thead><tr><th></th><th>Regresja</th><th>Sieć neuronowa</th><th>Zespół</th><th>TP bazowo</th></tr></thead>
-        <tbody>${models}</tbody>
-      </table></div>
-      <div class="muted small">Wartość &gt; 0% oznacza, że model przewiduje lepiej niż zgadywanie średniej, na ostatnich 1000 wynikach, których wcześniej nie widział. Pogrubiony: model aktualnie używany.</div>
-      <h3>Handel na papierze</h3>
-      <div class="kv"><span>Transakcje (ostatnie ${pp.n})</span><b>${signed(pp.avgR)} R średnio</b></div>
-      <div class="kv"><span>Pewność statystyczna (t-stat)</span><b class="${pp.tstat >= ai.params.minTstat ? 'pos' : ''}">${fmt(pp.tstat)} / wymagane ${fmt(ai.params.minTstat, 1)}</b></div>`;
-  }
-
-  function renderRecord(ai) {
-    const t = ai.trades;
-    if (!t.n) {
-      $('record').innerHTML = `<p class="empty">AI nie dało jeszcze żadnej podpowiedzi. To normalne: podpowiada dopiero po udowodnieniu przewagi.</p>`;
+  function renderLedger(lab) {
+    const l = lab.ledger;
+    if (!l.n) {
+      $('ledger-tiles').innerHTML = '<p class="empty">Desk nie dał jeszcze żadnej podpowiedzi. To normalne: podpowiada dopiero, gdy któraś strategia udowodni przewagę.</p>';
+      $('ledger-table').innerHTML = '';
+      renderEquity([]);
       return;
     }
-    const rows = t.last.map((x) => `<tr>
-        <td>${time(x.t)}</td><td class="${x.side === 'long' ? 'buy' : 'sell'}">${ACTION[x.side]}</td>
-        <td>${fmt(x.entry)}</td><td>${RESULT[x.result]}</td><td class="${x.r >= 0 ? 'pos' : 'neg'}">${signed(x.r)} R</td></tr>`).join('');
-    $('record').innerHTML = `
-      <div class="tiles">
-        <div class="tile"><span>Podpowiedzi</span><b>${t.n}</b></div>
-        <div class="tile"><span>Trafione TP</span><b>${pct(t.wins / t.n)}</b></div>
-        <div class="tile"><span>Średnio na transakcję</span><b class="${t.avgR >= 0 ? 'pos' : 'neg'}">${signed(t.avgR)} R</b></div>
-        <div class="tile"><span>Razem</span><b class="${t.totalR >= 0 ? 'pos' : 'neg'}">${signed(t.totalR, 1)} R</b></div>
-        <div class="tile"><span>Ostatnie ${t.recentN}</span><b class="${t.recentAvgR >= 0 ? 'pos' : 'neg'}">${signed(t.recentAvgR)} R</b></div>
-      </div>
-      <div class="muted small">R = wielokrotność ryzyka. +1,5 R to trafiony TP, −1 R to stop loss; spread jest już odjęty. ${t.open ? 'Jedna podpowiedź jest teraz w toku.' : ''}</div>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Świeca</th><th>Kierunek</th><th>Wejście</th><th>Wynik</th><th>R</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>`;
+    const tile = (label, value, cls = '') => `<div class="tile"><span>${label}</span><b class="${cls}">${value}</b></div>`;
+    const pf = l.profitFactor === null ? '–' : isFinite(l.profitFactor) ? fmt(l.profitFactor) : '∞';
+    $('ledger-tiles').innerHTML = `<div class="tiles">
+      ${tile('Transakcje', l.n.toLocaleString('pl-PL'))}
+      ${tile('Trafione TP', pct(l.wins / l.n))}
+      ${tile('Średnio', `${signed(l.avgR)} R`, l.avgR >= 0 ? 'pos' : 'neg')}
+      ${tile('Razem', `${signed(l.totalR, 1)} R`, l.totalR >= 0 ? 'pos' : 'neg')}
+      ${tile('Profit factor', pf)}
+      ${tile('Max obsunięcie', `${fmt(l.maxDrawdownR, 1)} R`)}
+    </div>`;
+    renderEquity(l.equity, l.n);
+    $('ledger-table').innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Wejście</th><th>Strategia</th><th>Kierunek</th><th>Cena</th><th>Wynik</th><th>R</th></tr></thead>
+      <tbody>${l.last.map((x) => `<tr>
+        <td>${time(x.t)}</td><td>${esc(x.label.split(' · ')[0])}</td>
+        <td class="${x.side === 'long' ? 'buy' : 'sell'}">${ACTION[x.side]}</td>
+        <td>${fmt(x.entry)}</td><td>${RESULT[x.result]}</td>
+        <td class="${x.r >= 0 ? 'pos' : 'neg'}">${signed(x.r)} R</td></tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+
+  // Equity curve in R: one series, 2px line, 10% area wash to the zero line,
+  // end value labelled, crosshair + tooltip on hover.
+  let equityKey = '';
+  let equityData = null;
+  function renderEquity(points, n) {
+    const box = $('equity');
+    const key = `${points.length}:${points[points.length - 1]}:${box.clientWidth}`;
+    if (key === equityKey) return;
+    equityKey = key;
+    if (points.length < 2) {
+      box.innerHTML = '';
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    const W = Math.max(280, box.clientWidth);
+    const H = 180;
+    const ys = [0, ...points];
+    const endText = `${signed(ys[ys.length - 1], 1)} R`;
+    const pad = { l: 44, r: 20 + endText.length * 7.5, t: 12, b: 22 };
+    let lo = Math.min(...ys);
+    let hi = Math.max(...ys);
+    if (hi - lo < 1) hi = lo + 1;
+    const stepRaw = (hi - lo) / 4;
+    const mag = 10 ** Math.floor(Math.log10(stepRaw));
+    const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= stepRaw);
+    lo = Math.floor(lo / step) * step;
+    hi = Math.ceil(hi / step) * step;
+    const x = (i) => pad.l + (i / (ys.length - 1)) * (W - pad.l - pad.r);
+    const y = (v) => pad.t + ((hi - v) / (hi - lo)) * (H - pad.t - pad.b);
+    const ticks = [];
+    for (let v = lo; v <= hi + 1e-9; v += step) ticks.push(v);
+    const line = ys.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+    const area = `${line}L${x(ys.length - 1).toFixed(1)},${y(0).toFixed(1)}L${x(0).toFixed(1)},${y(0).toFixed(1)}Z`;
+    const last = ys[ys.length - 1];
+    const perPoint = (n || points.length) / points.length;
+    box.setAttribute('aria-label', `Krzywa wyniku desku: ${signed(last, 1)} R po ${n} transakcjach`);
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
+      ${ticks.map((v) => `<line class="grid" x1="${pad.l}" x2="${W - pad.r}" y1="${y(v)}" y2="${y(v)}"/>
+        <text class="axis" x="${pad.l - 6}" y="${y(v) + 4}" text-anchor="end">${signed(v, 0).replace('+0', '0').replace('−0', '0')}</text>`).join('')}
+      <line class="zero" x1="${pad.l}" x2="${W - pad.r}" y1="${y(0)}" y2="${y(0)}"/>
+      <path class="eq-area" d="${area}"/>
+      <path class="eq-line" d="${line}"/>
+      <circle class="eq-dot" cx="${x(ys.length - 1)}" cy="${y(last)}" r="4"/>
+      <text class="end-label" x="${x(ys.length - 1) + 8}" y="${y(last) + 4}">${endText}</text>
+      <text class="axis" x="${pad.l}" y="${H - 4}">transakcja 1</text>
+      <text class="axis" x="${W - pad.r}" y="${H - 4}" text-anchor="end">${n}</text>
+      <line class="cross" x1="0" x2="0" y1="${pad.t}" y2="${H - pad.b}" visibility="hidden"/>
+      <rect class="hit" x="${pad.l}" y="0" width="${W - pad.l - pad.r}" height="${H}"/>
+    </svg>`;
+    equityData = { ys, x, y, perPoint, pad, W };
+  }
+
+  const tooltip = $('tooltip');
+  $('equity').addEventListener('pointermove', (e) => {
+    if (!equityData) return;
+    const svg = $('equity').querySelector('svg');
+    const rect = svg.getBoundingClientRect();
+    const { ys, x, perPoint, pad, W } = equityData;
+    const px = ((e.clientX - rect.left) / rect.width) * W;
+    const i = Math.max(0, Math.min(ys.length - 1, Math.round(((px - pad.l) / (W - pad.l - pad.r)) * (ys.length - 1))));
+    const cross = svg.querySelector('.cross');
+    cross.setAttribute('x1', x(i));
+    cross.setAttribute('x2', x(i));
+    cross.setAttribute('visibility', 'visible');
+    tooltip.hidden = false;
+    tooltip.textContent = '';
+    const v = document.createElement('b');
+    v.textContent = `${signed(ys[i], 1)} R`;
+    const lbl = document.createElement('span');
+    lbl.textContent = i === 0 ? 'start' : `po transakcji ${Math.round(i * perPoint)}`;
+    tooltip.append(v, lbl);
+    tooltip.style.left = `${Math.min(window.innerWidth - 170, e.clientX + 12)}px`;
+    tooltip.style.top = `${e.clientY + 12}px`;
+  });
+  $('equity').addEventListener('pointerleave', () => {
+    tooltip.hidden = true;
+    $('equity').querySelector('.cross')?.setAttribute('visibility', 'hidden');
+  });
+  window.addEventListener('resize', () => { equityKey = ''; if (state) renderLedger(state.lab); });
+
+  function renderLab(lab) {
+    const th = lab.threshold;
+    const rows = lab.strategies.map((s) => {
+      const [label, cls] = STATUS[s.status];
+      const prog = Math.min(1, s.learned / s.minSamples);
+      const skill = (dir) => {
+        const m = s.models[dir];
+        const v = m.skill[m.best];
+        return `<span class="${v > 0 ? 'pos' : v < 0 ? 'neg' : ''}">${v === null ? '–' : `${signed(v * 100, 1)}%`}</span> <small>${MODEL_SHORT[m.best]}</small>`;
+      };
+      const p = s.paper;
+      const tOk = p.tstat !== null && p.tstat >= p.threshold;
+      const h = s.hint;
+      const lastSig = h && h.action !== 'wait' ? `<span class="${h.action === 'long' ? 'buy' : 'sell'}">${ACTION[h.action]}</span> (${time(h.barTime)})` : '–';
+      return `<li class="strat">
+        <div class="strat-head"><b>${esc(s.label)}</b><span class="badge ${cls}">${label}</span></div>
+        ${s.ready ? '' : `<div class="bar"><span style="width:${prog * 100}%"></span></div>`}
+        <div class="strat-grid">
+          <span>Wyniki nauki</span><b>${s.learned.toLocaleString('pl-PL')}${s.ready ? '' : ` / ${s.minSamples}`}</b>
+          <span>Przewaga nad zgadywaniem</span><b>K ${skill('long')} · S ${skill('short')}</b>
+          <span>Papier (${p.n} trans.)</span><b>${signed(p.avgR)} R, t-stat <span class="${tOk ? 'pos' : ''}">${fmt(p.tstat)}</span> / ${fmt(p.threshold)}</b>
+          <span>Ostatni sygnał</span><b>${lastSig}</b>
+        </div>
+      </li>`;
+    }).join('');
+    $('lab').innerHTML = `<p class="muted small">Próg dowodu: t-stat ≥ ${fmt(th.tstat)} na transakcjach papierowych (bazowo ${fmt(th.base, 1)}, podniesiony, bo testujemy ${th.strategies} strategii naraz) i minimum 50 transakcji. K/S = kupno/sprzedaż, obok model, który przewiduje najlepiej.</p>
+      <ul class="strats">${rows}</ul>`;
+  }
+
+  function renderData(lab) {
+    const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${v}</b></div>`;
+    const acc = lab.live.account;
+    const aux = lab.aux.map((a) => kv(esc(a.symbol), a.bars ? `${a.bars.toLocaleString('pl-PL')} świec, ostatnia ${ago(a.lastBarTime)} temu` : '<span class="neg">brak danych</span>')).join('');
+    $('data').innerHTML = [
+      kv(`Świece XAUUSD ${lab.baseTf}`, lab.bars.toLocaleString('pl-PL')),
+      kv('Ostatnia świeca', lab.lastBarTime ? `${time(lab.lastBarTime)} (${ago(lab.lastBarTime)} temu)` : '–'),
+      aux,
+      kv('Saldo konta', acc ? `${fmt(acc.balance)} ${esc(acc.currency)}` : 'brak (stary cBot?)'),
+      kv('Ryzyko na transakcję', `${fmt(lab.params.riskPct, 1)}% salda`),
+      kv('Zakładany spread', `${fmt(lab.params.costUsd)} $ (blokada powyżej ${fmt(lab.params.costUsd * lab.params.maxSpreadMult)} $)`),
+      kv('Dzienny limit straty', `${lab.params.dailyLossR} R`),
+    ].join('');
   }
 
   function render() {
     if (!state) return;
-    const ai = state.ai;
-    renderPrice();
+    const lab = state.lab;
+    renderHeader(lab);
     $('market-banner').hidden = state.marketOpen !== false;
-    // New closed bars should arrive every timeframe; allow two missed bars.
-    const barAge = ai.lastBarTime ? Date.now() - new Date(ai.lastBarTime) : Infinity;
-    const staleBars = state.marketOpen && ai.bars > 0 && barAge > (ai.tfMinutes * 3 + 2) * 60_000;
+    const barAge = lab.lastBarTime ? Date.now() - new Date(lab.lastBarTime) : Infinity;
+    const staleBars = state.marketOpen && lab.bars > 0 && barAge > (lab.tfMinutes * 3 + 2) * 60_000;
     $('stale-banner').hidden = !staleBars;
     $('stale-banner').textContent = staleBars
-      ? `Uwaga: od ${ago(ai.lastBarTime)} nie przyszła nowa świeca z cTradera. Podpowiedź może być nieaktualna. Sprawdź, czy cBot XauAiFeeder działa.`
+      ? `Uwaga: od ${ago(lab.lastBarTime)} nie przyszła nowa świeca z cTradera. Decyzja może być nieaktualna. Sprawdź, czy cBot XauAiFeeder działa.`
       : '';
     document.body.classList.toggle('stale-hint', staleBars);
-    renderHint(ai);
-    renderLearning(ai);
-    renderRecord(ai);
+    renderDecision(lab);
+    renderLedger(lab);
+    renderLab(lab);
+    renderData(lab);
   }
 
   function beep() {
@@ -177,12 +301,12 @@
     o.stop(audio.currentTime + 0.4);
   }
 
-  function onSignal(h) {
+  function onSignal(d) {
     if (sound.checked) beep();
     if ('Notification' in window && Notification.permission === 'granted') {
-      const lv = h[h.action];
-      new Notification(`AI: ${ACTION[h.action]} XAUUSD`, {
-        body: `Wejście ${fmt(h.entry)}, SL ${fmt(lv.sl)}, TP ${fmt(lv.tp)}. ${h.why}`,
+      const size = d.sizing?.ok ? `, ${fmt(d.sizing.lots, 2)} lota` : '';
+      new Notification(`AI Desk: ${ACTION[d.action]} XAUUSD`, {
+        body: `Wejście ${fmt(d.entry)}, SL ${fmt(d.sl)}, TP ${fmt(d.tp)}${size}. ${d.strategyLabel}`,
       });
     }
   }
