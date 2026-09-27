@@ -18,6 +18,9 @@ const { regimeOf, REGIME_LABELS } = require('./strategy');
 const { sigmoid } = require('./model');
 
 const MIN_TRADES = 30; // before the personal model gives opinions
+const TRAIN_WINDOW = 1500; // most recent closed trades the model learns from (your recent style matters most)
+const REFITS = 25; // walk-forward refits over the whole history (bounded work for active traders)
+const RECOMPUTE_MS = 30_000; // at most one full re-analysis per 30 s while trades keep changing
 const DAY_MS = 86_400_000;
 const idx = (name) => FEATURE_NAMES.indexOf(name);
 
@@ -49,24 +52,29 @@ function holdingOf(ms) {
 
 // Batch logistic regression with strong L2 (few samples, avoid overfitting).
 function fitLogistic(X, y, { lambda = 30, iters = 300, lr = 0.5 } = {}) {
+  const n = X.length;
   const d = X[0].length;
-  const w = new Array(d).fill(0);
-  const pos = y.reduce((a, b) => a + b, 0);
-  let b = Math.log((pos + 1) / (y.length - pos + 1));
+  // Flat typed arrays: several times faster than nested JS arrays.
+  const F = new Float64Array(n * d);
+  for (let i = 0; i < n; i++) for (let j = 0; j < d; j++) F[i * d + j] = X[i][j];
+  const w = new Float64Array(d);
+  const gw = new Float64Array(d);
+  const pos = y.reduce((a, v) => a + v, 0);
+  let b = Math.log((pos + 1) / (n - pos + 1));
   for (let it = 0; it < iters; it++) {
-    const gw = new Array(d).fill(0);
+    gw.fill(0);
     let gb = 0;
-    for (let i = 0; i < X.length; i++) {
+    for (let i = 0, o = 0; i < n; i++, o += d) {
       let z = b;
-      for (let j = 0; j < d; j++) z += w[j] * X[i][j];
-      const e = sigmoid(z) - y[i];
+      for (let j = 0; j < d; j++) z += w[j] * F[o + j];
+      const e = 1 / (1 + Math.exp(-z)) - y[i];
       gb += e;
-      for (let j = 0; j < d; j++) gw[j] += e * X[i][j];
+      for (let j = 0; j < d; j++) gw[j] += e * F[o + j];
     }
-    for (let j = 0; j < d; j++) w[j] -= lr * (gw[j] / X.length + (lambda * w[j]) / X.length);
-    b -= lr * (gb / X.length);
+    for (let j = 0; j < d; j++) w[j] -= lr * (gw[j] / n + (lambda * w[j]) / n);
+    b -= lr * (gb / n);
   }
-  return { w, b };
+  return { w: Array.from(w), b };
 }
 
 const predictWith = (m, x) => sigmoid(x.reduce((z, v, j) => z + m.w[j] * v, m.b));
@@ -162,7 +170,7 @@ class Journal {
 
   touch() {
     this.dirty = true;
-    this.cache = null;
+    this.stale = true;
   }
 
   // Market features at a given time from the lab's stored candles (null when
@@ -180,6 +188,15 @@ class Journal {
     const inGap = i + 1 < base.length && base[i + 1].t + ms >= time;
     if (!fresh && !inGap) return null;
     return computeFeatures(base.slice(i - 259, i + 1), { tfMs: ms, baseMs: ms, aux: this.lab.auxCtx() });
+  }
+
+  // Market conditions at the newest candle (for open positions; works when
+  // the market is closed too, e.g. a position held over the weekend).
+  latestFeatures() {
+    const base = this.lab.base;
+    if (base.length < 260) return null;
+    const ms = this.lab.baseMs;
+    return computeFeatures(base.slice(-260), { tfMs: ms, baseMs: ms, aux: this.lab.auxCtx() });
   }
 
   // Fill in market conditions for trades whose candles have arrived since.
@@ -215,8 +232,11 @@ class Journal {
   }
 
   // Personal model + honest walk-forward test + insights. Cached until trades change.
+  // Heavy (model fits), so it is throttled: while trades keep changing the
+  // previous result is served for up to RECOMPUTE_MS instead of blocking the
+  // server after every candle.
   analyze() {
-    if (this.cache) return this.cache;
+    if (this.cache && (!this.stale || Date.now() - this.cacheAt < RECOMPUTE_MS)) return this.cache;
     const all = [...this.trades.values()].sort((a, b) => a.closeTime - b.closeTime);
     const learnable = all.filter((t) => t.x).sort((a, b) => a.entryTime - b.entryTime);
 
@@ -229,7 +249,7 @@ class Journal {
     let trainedOn = 0;
     let known = 0; // trades in byClose closed before the current entry
     let knownWins = 0;
-    const every = Math.max(5, Math.floor(learnable.length / 60)); // bounded work for long histories
+    const every = Math.max(5, Math.ceil(learnable.length / REFITS));
     for (const t of learnable) {
       while (known < byClose.length && byClose[known].closeTime <= t.entryTime) {
         knownWins += byClose[known].profit > 0 ? 1 : 0;
@@ -237,7 +257,7 @@ class Journal {
       }
       if (known < MIN_TRADES) continue;
       if (!model || known - trainedOn >= every) {
-        const train = byClose.slice(0, known);
+        const train = byClose.slice(Math.max(0, known - TRAIN_WINDOW), known);
         stats = this.featureStats(train);
         model = fitLogistic(train.map((x) => this.inputs(x, stats)), train.map((x) => (x.profit > 0 ? 1 : 0)));
         trainedOn = known;
@@ -270,12 +290,15 @@ class Journal {
     // Final model on all trades, used for open positions.
     let finalModel = null;
     if (learnable.length >= MIN_TRADES) {
-      const st = this.featureStats(learnable);
-      const mdl = fitLogistic(learnable.map((t) => this.inputs(t, st)), learnable.map((t) => (t.profit > 0 ? 1 : 0)));
+      const recent = byClose.slice(-TRAIN_WINDOW);
+      const st = this.featureStats(recent);
+      const mdl = fitLogistic(recent.map((t) => this.inputs(t, st)), recent.map((t) => (t.profit > 0 ? 1 : 0)));
       finalModel = { stats: st, model: mdl };
     }
 
     this.cache = { all, learnable, evaluation, finalModel, insights: this.insights(all) };
+    this.cacheAt = Date.now();
+    this.stale = false;
     return this.cache;
   }
 
@@ -324,7 +347,7 @@ class Journal {
 
   snapshot() {
     const a = this.analyze();
-    const now = this.positions.length ? this.featuresAt(Date.now()) : null; // market right now, once
+    const now = this.positions.length ? this.latestFeatures() : null; // market right now, once
     const profits = a.all.map((t) => t.profit);
     const wins = profits.filter((v) => v > 0);
     const losses = profits.filter((v) => v <= 0);

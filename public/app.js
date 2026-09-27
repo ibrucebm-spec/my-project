@@ -299,7 +299,9 @@
     for (const p of j.open) {
       const pw = typeof p.pWin === 'number'
         ? `W podobnych warunkach Twoje transakcje ${p.side === 'long' ? 'kupna' : 'sprzedaży'} kończyły się zyskiem w <b>${pct(p.pWin)}</b> przypadków.`
-        : `Model osobisty potrzebuje ${j.minTrades} transakcji, żeby oceniać (teraz ${j.learnable}).`;
+        : j.learnable >= j.minTrades
+          ? 'Brak aktualnych świec, żeby ocenić warunki rynku.'
+          : `Model osobisty potrzebuje ${j.minTrades} transakcji z danymi rynku, żeby oceniać (teraz ${j.learnable}).`;
       parts.push(`<div class="coach ${p.side}">
         <div><b class="${p.side === 'long' ? 'buy' : 'sell'}">${ACTION[p.side]}</b> ${fmt(p.lots, p.lots < 0.1 ? 3 : 2)} lota od ${fmt(p.entry)} · <span class="${p.profit >= 0 ? 'pos' : 'neg'}">${money(p.profit)}</span></div>
         <div class="small">${pw} Desk AI: ${esc(p.desk)}${typeof p.deskP === 'number' ? `, szansa TP wg modelu ${pct(p.deskP)}` : ''}.${p.regime ? ` Rynek: ${esc(p.regime)}.` : ''}</div>
@@ -355,13 +357,20 @@
     el.scrollIntoView({ block: 'nearest' });
     return el;
   }
+  let asking = false;
+  const setAsking = (on) => {
+    asking = on;
+    for (const el of document.querySelectorAll('#analyst button, #analyst input')) el.disabled = on;
+  };
   async function ask(question) {
+    if (asking) return;
     if (state && !state.analyst) {
       addChat('system', 'Analityk AI jest wyłączony. Utwórz klucz API na console.anthropic.com, kliknij dwukrotnie analityk.bat w folderze desku, wklej klucz i uruchom ponownie start.bat.');
       return;
     }
     addChat('user', question);
-    const pending = addChat('assistant', 'Analizuję…');
+    const pending = addChat('assistant', 'Analizuję… (to może potrwać do minuty)');
+    setAsking(true);
     try {
       const res = await fetch('/api/ask', {
         method: 'POST',
@@ -375,6 +384,8 @@
     } catch (err) {
       pending.className = 'msg system';
       pending.textContent = err.message;
+    } finally {
+      setAsking(false);
     }
   }
   $('analyst-form').addEventListener('submit', (e) => {

@@ -88,7 +88,8 @@ function briefState(state) {
 function createAnalyst({ apiKey } = {}) {
   const enabled = !!apiKey && !!Anthropic;
   if (apiKey && !Anthropic) console.warn('[analityk] brak biblioteki @anthropic-ai/sdk: uruchom start.bat albo npm install');
-  const client = enabled ? new Anthropic({ apiKey }) : null;
+  // Generous timeout: a thoughtful answer can take a while; retries cover brief network hiccups.
+  const client = enabled ? new Anthropic({ apiKey, timeout: 180_000, maxRetries: 2 }) : null;
 
   // history: earlier turns of this conversation [{ role, content }], plain text.
   async function ask(question, state, history = []) {
@@ -115,9 +116,15 @@ function createAnalyst({ apiKey } = {}) {
       const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
       return text || 'Analityk nie zwrócił odpowiedzi. Spróbuj ponownie.';
     } catch (err) {
+      // The exact cause goes to the console window, to help diagnose network problems.
+      console.error('[analityk] błąd:', err?.constructor?.name, err?.status ?? '', err?.message, err?.cause?.message || err?.cause?.code || '');
+      if (err instanceof Anthropic.APIConnectionTimeoutError) throw new Error('Analityk nie zdążył odpowiedzieć (przekroczony czas). Spróbuj ponownie za chwilę.');
       if (err instanceof Anthropic.AuthenticationError) throw new Error('Klucz ANTHROPIC_API_KEY jest nieprawidłowy.');
       if (err instanceof Anthropic.RateLimitError) throw new Error('Za dużo pytań naraz, spróbuj za chwilę.');
-      if (err instanceof Anthropic.APIConnectionError) throw new Error('Brak połączenia z serwerem Claude. Sprawdź internet.');
+      if (err instanceof Anthropic.APIConnectionError) {
+        const detail = err?.cause?.code || err?.cause?.message || err.message;
+        throw new Error(`Brak połączenia z serwerem Claude (${detail}). Sprawdź internet, a jeśli masz antywirusa lub firewall, zezwól programowi Node.js na dostęp do sieci.`);
+      }
       if (err instanceof Anthropic.APIError) throw new Error(`Błąd API Claude (${err.status}): ${err.message}`);
       throw err;
     }

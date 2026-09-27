@@ -178,3 +178,4 @@ footer { padding: 0 20px 24px; font-size: 12px; }
   .kv { flex-direction: column; gap: 0; }
   .kv b { text-align: left; }
 }
+button:disabled, input:disabled { opacity: .5; cursor: wait; }
