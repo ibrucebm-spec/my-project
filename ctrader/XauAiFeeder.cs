@@ -149,7 +149,7 @@ namespace cAlgo.Robots
         {
             try
             {
-                using (var req = new HttpRequestMessage(HttpMethod.Post, ServerUrl))
+                using (var req = new HttpRequestMessage(System.Net.Http.HttpMethod.Post, ServerUrl))
                 {
                     req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + IngestToken);
                     req.Content = new StringContent(body, Encoding.UTF8, "application/json");
