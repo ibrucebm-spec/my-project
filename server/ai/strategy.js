@@ -49,6 +49,7 @@ const REGIME_LABELS = {
   'down-volatile': 'trend spadkowy, nerwowo',
 };
 const REGIME_MIN_TRADES = 20;
+const REGIME_WINDOW = 60; // recent paper trades per regime that decide (early losses fade out)
 const I_SPREAD = FEATURE_NAMES.indexOf('emaSpread');
 const I_VOL = FEATURE_NAMES.indexOf('volRegime');
 
@@ -57,7 +58,7 @@ function regimeOf(x) {
   return `${trend}-${x[I_VOL] > 0.1 ? 'volatile' : 'calm'}`;
 }
 
-const emptyRegimes = () => Object.fromEntries(REGIMES.map((r) => [r, { n: 0, sumR: 0 }]));
+const emptyRegimes = () => Object.fromEntries(REGIMES.map((r) => [r, { n: 0, sumR: 0, recent: [] }]));
 
 const DEFAULTS = {
   costUsd: 0.35, // spread + commission per ounce, in USD
@@ -123,7 +124,13 @@ class Strategy extends EventEmitter {
   // Has this strategy been losing in the given regime? (needs enough trades to say)
   regimeRecord(regime) {
     const r = this.stats.regimes[regime];
-    return { regime, label: REGIME_LABELS[regime], n: r.n, avgR: r.n ? r.sumR / r.n : null, ok: r.n < REGIME_MIN_TRADES || r.sumR >= 0 };
+    const recent = r.recent || [];
+    const sum = recent.reduce((a, b) => a + b, 0);
+    return {
+      regime, label: REGIME_LABELS[regime], n: recent.length, total: r.n,
+      avgR: recent.length ? sum / recent.length : null,
+      ok: recent.length < REGIME_MIN_TRADES || sum >= 0,
+    };
   }
 
   naive(dir) {
@@ -228,6 +235,7 @@ class Strategy extends EventEmitter {
     const word = dir === 'long' ? 'KUPNA' : 'SPRZEDAŻY';
     let action = 'wait';
     let why;
+    let refused = null;
     if (!ready) why = `uczy się: ${this.stats.learned} z ${minSamples} wyników`;
     else if (ctx.late) why = 'świeca zamknięta po przerwie w handlu, bez sygnału';
     else if (!candidate) why = 'za mała pewność, żeby pokryć ryzyko i spread';
@@ -236,6 +244,7 @@ class Strategy extends EventEmitter {
         ? `sygnał ${word} tylko na papierze: zbiera wyniki (${paper.n}/${MIN_PAPER})`
         : `sygnał ${word} tylko na papierze: brak udowodnionej przewagi`;
     } else if (!inRegime.ok) {
+      refused = 'regime';
       why = `sygnał ${word} odrzucony: w reżimie „${inRegime.label}” ta strategia traci (${inRegime.n} transakcji, średnio ${inRegime.avgR.toFixed(2)} R)`;
     } else {
       action = dir;
@@ -254,6 +263,7 @@ class Strategy extends EventEmitter {
       barEnd: bar.end ?? bar.t + this.tfMs,
       late: !!ctx.late,
       action,
+      refused,
       why,
       ready,
       proven,
@@ -330,8 +340,11 @@ class Strategy extends EventEmitter {
           this.stats.paperTotal.n++;
           this.stats.paperTotal.sumR += r;
           if (s.regime) {
-            this.stats.regimes[s.regime].n++;
-            this.stats.regimes[s.regime].sumR += r;
+            const g = this.stats.regimes[s.regime];
+            g.n++;
+            g.sumR += r;
+            (g.recent ||= []).push(r);
+            if (g.recent.length > REGIME_WINDOW) g.recent.shift();
           }
           this.paperOpen = false;
         }

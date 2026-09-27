@@ -78,8 +78,7 @@ class Journal {
     this.aiAtOpen = state?.aiAtOpen || {}; // desk opinion recorded when a live position first appeared
     this.positions = [];
     this.positionsAt = 0;
-    this.version = 0;
-    this.dirty = true;
+    this.dirty = false; // unsaved changes
     this.cache = null;
   }
 
@@ -124,8 +123,10 @@ class Journal {
   // [id, side, entryTimeSec, entryPrice, volumeUnits, sl, tp, netProfit]
   setPositions(rows) {
     if (!Array.isArray(rows)) return;
-    const d = this.lab.desk.decision;
+    const d = this.currentDecision();
     const byStrat = this.fastestHint();
+    const cutoff = Date.now() - 90 * DAY_MS;
+    for (const [id, v] of Object.entries(this.aiAtOpen)) if (!(v.at > cutoff)) delete this.aiAtOpen[id];
     this.positions = rows.filter((r) => Array.isArray(r) && r.length >= 8).map(([id, side, et, ep, vol, sl, tp, profit]) => {
       const p = {
         id: String(id), side: Number(side) > 0 ? 1 : -1, entryTime: Number(et) < 1e12 ? Number(et) * 1000 : Number(et),
@@ -135,6 +136,7 @@ class Journal {
       if (!this.aiAtOpen[p.id] && Date.now() - p.entryTime < 30 * 60_000) {
         const dir = p.side > 0 ? 'long' : 'short';
         this.aiAtOpen[p.id] = {
+          at: Date.now(),
           deskAction: d?.action || 'wait',
           agrees: d?.action === dir,
           against: d?.action && d.action !== 'wait' && d.action !== dir,
@@ -145,7 +147,12 @@ class Journal {
       return p;
     });
     this.positionsAt = Date.now();
-    this.version++;
+  }
+
+  // The desk decision only if it is still valid (not from hours ago).
+  currentDecision() {
+    const d = this.lab.desk.decision;
+    return d && Date.now() <= d.validUntil ? d : null;
   }
 
   fastestHint() {
@@ -156,18 +163,23 @@ class Journal {
   touch() {
     this.dirty = true;
     this.cache = null;
-    this.version++;
   }
 
   // Market features at a given time from the lab's stored candles (null when
   // the candles for that time are no longer or not yet in memory).
   featuresAt(time) {
     const base = this.lab.base;
-    const i = lastClosedIndex(base, time, this.lab.baseMs);
-    if (i < 250) return null;
-    const bars = base.slice(i - 259, i + 1);
-    if (time - (bars[bars.length - 1].t + this.lab.baseMs) > 3 * this.lab.baseMs + 3 * DAY_MS) return null;
-    return computeFeatures(bars, { tfMs: this.lab.baseMs, baseMs: this.lab.baseMs, aux: this.lab.auxCtx() });
+    const ms = this.lab.baseMs;
+    const i = lastClosedIndex(base, time, ms);
+    if (i < 259) return null;
+    // The candles right before `time` must be known: either the last one
+    // closed just before it, or a later candle exists and `time` fell into a
+    // gap with no trading (weekend, daily break). Otherwise they have not
+    // arrived yet; try again later instead of using stale data.
+    const fresh = time - (base[i].t + ms) <= 2 * ms;
+    const inGap = i + 1 < base.length && base[i + 1].t + ms >= time;
+    if (!fresh && !inGap) return null;
+    return computeFeatures(base.slice(i - 259, i + 1), { tfMs: ms, baseMs: ms, aux: this.lab.auxCtx() });
   }
 
   // Fill in market conditions for trades whose candles have arrived since.
@@ -208,18 +220,29 @@ class Journal {
     const all = [...this.trades.values()].sort((a, b) => a.closeTime - b.closeTime);
     const learnable = all.filter((t) => t.x).sort((a, b) => a.entryTime - b.entryTime);
 
-    // Walk-forward: each trade predicted by a model trained on earlier trades only.
+    // Walk-forward: each trade is predicted by a model trained only on trades
+    // that had already CLOSED when it was opened (their results were known).
+    const byClose = [...learnable].sort((a, b) => a.closeTime - b.closeTime);
     const tested = [];
     let model = null;
     let stats = null;
+    let trainedOn = 0;
+    let known = 0; // trades in byClose closed before the current entry
+    let knownWins = 0;
     const every = Math.max(5, Math.floor(learnable.length / 60)); // bounded work for long histories
-    for (let k = MIN_TRADES; k < learnable.length; k++) {
-      if (!model || (k - MIN_TRADES) % every === 0) {
-        const train = learnable.slice(0, k);
-        stats = this.featureStats(train);
-        model = fitLogistic(train.map((t) => this.inputs(t, stats)), train.map((t) => (t.profit > 0 ? 1 : 0)));
+    for (const t of learnable) {
+      while (known < byClose.length && byClose[known].closeTime <= t.entryTime) {
+        knownWins += byClose[known].profit > 0 ? 1 : 0;
+        known++;
       }
-      tested.push({ t: learnable[k], p: predictWith(model, this.inputs(learnable[k], stats)) });
+      if (known < MIN_TRADES) continue;
+      if (!model || known - trainedOn >= every) {
+        const train = byClose.slice(0, known);
+        stats = this.featureStats(train);
+        model = fitLogistic(train.map((x) => this.inputs(x, stats)), train.map((x) => (x.profit > 0 ? 1 : 0)));
+        trainedOn = known;
+      }
+      tested.push({ t, p: predictWith(model, this.inputs(t, stats)), base: (knownWins + 1) / (known + 2) });
     }
     let evaluation = null;
     if (tested.length >= 10) {
@@ -227,13 +250,12 @@ class Journal {
       let m = 0;
       let b = 0;
       let wins = 0;
-      tested.forEach(({ t, p }, i) => {
+      for (const { t, p, base } of tested) {
         const y = t.profit > 0 ? 1 : 0;
-        const base = (learnable.slice(0, MIN_TRADES + i).filter((x) => x.profit > 0).length + 1) / (MIN_TRADES + i + 2);
         m += ll(p, y);
         b += ll(base, y);
         wins += y;
-      });
+      }
       const skipped = tested.filter(({ p }) => p < 0.4);
       evaluation = {
         tested: tested.length,
@@ -280,13 +302,12 @@ class Journal {
   }
 
   // What the coach says about an open position right now.
-  coach(p, analysis) {
+  coach(p, analysis, f) {
     const lotSize = this.lab.live.account?.lotSize || 100;
     const out = {
       id: p.id, side: p.side > 0 ? 'long' : 'short', entry: p.entry, lots: p.volume / lotSize, sl: p.sl, tp: p.tp,
       profit: p.profit, entryTime: new Date(p.entryTime).toISOString(),
     };
-    const f = this.featuresAt(Date.now());
     if (f && analysis.finalModel) {
       const { stats, model } = analysis.finalModel;
       out.pWin = predictWith(model, this.inputs({ side: p.side, x: f.x }, stats));
@@ -294,15 +315,16 @@ class Journal {
     if (f) out.regime = REGIME_LABELS[regimeOf(f.x)];
     const h = this.fastestHint();
     if (h) out.deskP = p.side > 0 ? h.pLong : h.pShort;
-    const d = this.lab.desk.decision;
+    const d = this.currentDecision();
     const dir = out.side;
-    out.desk = !d || d.action === 'wait' ? 'desk czeka' : d.action === dir ? 'zgodna z deskiem' : 'przeciwna do sygnału desku';
+    out.desk = !d ? 'brak aktualnej decyzji desku' : d.action === 'wait' ? 'desk czeka' : d.action === dir ? 'zgodna z deskiem' : 'przeciwna do sygnału desku';
     out.noStop = !p.sl;
     return out;
   }
 
   snapshot() {
     const a = this.analyze();
+    const now = this.positions.length ? this.featuresAt(Date.now()) : null; // market right now, once
     const profits = a.all.map((t) => t.profit);
     const wins = profits.filter((v) => v > 0);
     const losses = profits.filter((v) => v <= 0);
@@ -324,7 +346,7 @@ class Journal {
       evaluation: a.evaluation,
       drivers: top,
       insights: a.insights,
-      open: this.positions.map((p) => this.coach(p, a)),
+      open: this.positions.map((p) => this.coach(p, a, now)),
       positionsAt: this.positionsAt ? new Date(this.positionsAt).toISOString() : null,
       last: a.all.slice(-10).reverse().map((t) => ({
         side: t.side > 0 ? 'long' : 'short', entry: t.entry, close: t.close, profit: t.profit,

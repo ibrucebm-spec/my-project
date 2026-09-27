@@ -122,13 +122,21 @@ function createApp(cfg = config) {
     if (url.pathname === '/api/ask' && req.method === 'POST') {
       const ip = req.socket.remoteAddress || '';
       if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip)) return json(res, 403, { error: 'Analityk jest dostępny tylko na komputerze, na którym działa serwer.' });
+      // Other websites open in the browser must not be able to spend API
+      // credits: only this page (same origin, JSON body) may ask.
+      const host = String(req.headers.host || '');
+      const origin = req.headers.origin;
+      if (!/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host) || (origin && origin !== `http://${host}`)
+        || !String(req.headers['content-type'] || '').startsWith('application/json')) {
+        return json(res, 403, { error: 'Zapytanie spoza strony desku odrzucone.' });
+      }
       if (!analyst.enabled) return json(res, 503, { error: 'Analityk AI jest wyłączony: dodaj ANTHROPIC_API_KEY do pliku .env (instrukcja w README).' });
       if (analystBusy) return json(res, 429, { error: 'Analityk odpowiada na poprzednie pytanie, chwila.' });
+      analystBusy = true;
       try {
         const body = JSON.parse(await readBody(req));
         const question = String(body.question || '').trim().slice(0, 1000);
         if (!question) return json(res, 400, { error: 'Puste pytanie.' });
-        analystBusy = true;
         const answer = await analyst.ask(question, state(), Array.isArray(body.history) ? body.history : []);
         return json(res, 200, { answer });
       } catch (err) {

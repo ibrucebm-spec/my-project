@@ -240,7 +240,7 @@ class Lab extends EventEmitter {
       accepted++;
     }
     if (accepted || tradesAccepted) this.journal.refresh();
-    if (accepted || auxAccepted || tradesAccepted || this.journal.dirty) {
+    if (accepted || auxAccepted || tradesAccepted || (this.journal.dirty && this.opts.dir)) {
       this.version++;
       this.scheduleSave();
     }
@@ -330,8 +330,11 @@ class Lab extends EventEmitter {
   decide(bar) {
     const fresh = this.strategies.filter((s) => s.hint && !s.hint.late && s.hint.barEnd === bar.end && s.hint.action !== 'wait');
     let decision;
+    // A proven strategy that saw a signal but refused it (e.g. it loses in the
+    // current market regime) is the most useful thing to tell the trader.
+    const refused = this.strategies.find((s) => s.hint && s.hint.barEnd === bar.end && s.hint.refused);
     if (!fresh.length) {
-      decision = { action: 'wait', why: this.waitReason() };
+      decision = { action: 'wait', why: refused ? `${refused.label}: ${refused.hint.why}` : this.waitReason() };
     } else if (new Set(fresh.map((s) => s.hint.action)).size > 1) {
       decision = {
         action: 'wait',
@@ -486,7 +489,6 @@ class Lab extends EventEmitter {
       fs.writeFileSync(`${file}.tmp`, JSON.stringify(data));
       fs.renameSync(`${file}.tmp`, file);
     };
-    this.journal.dirty = false;
     try {
       for (const s of this.strategies) write(this.strategyFile(s), s.toState());
       write(this.labFile(), {
@@ -498,6 +500,7 @@ class Lab extends EventEmitter {
         spreads: this.spreads,
         journal: this.journal.toState(),
       });
+      this.journal.dirty = false;
     } catch (err) {
       console.error('[lab] nie udało się zapisać stanu:', err.message);
     }

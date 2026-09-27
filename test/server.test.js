@@ -57,8 +57,13 @@ test('static files cannot escape public dir', () => withServer(async (base) => {
   assert.notStrictEqual(r.status, 200);
 }));
 
-test('analyst answers only when configured', () => withServer(async (base) => {
-  const r = await fetch(`${base}/api/ask`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: 'Co teraz?' }) });
+test('analyst answers only when configured and only to this page', () => withServer(async (base) => {
+  const ask = (headers) => fetch(`${base}/api/ask`, { method: 'POST', headers, body: JSON.stringify({ question: 'Co teraz?' }) });
+  let r = await ask({ 'Content-Type': 'application/json' });
   assert.strictEqual(r.status, 503);
   assert.match((await r.json()).error, /ANTHROPIC_API_KEY/);
+  r = await ask({ 'Content-Type': 'text/plain' }); // cross-site form/fetch without preflight
+  assert.strictEqual(r.status, 403);
+  r = await ask({ 'Content-Type': 'application/json', Origin: 'https://evil.example' });
+  assert.strictEqual(r.status, 403);
 }));

@@ -81,3 +81,22 @@ test('journal survives a restart', () => {
   assert.ok([...b.journal.trades.values()].every((t) => t.x));
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('walk-forward test never uses trades that were still open', () => {
+  const lab = new Lab({ auxSymbols: [], strategies: 'M15:1:1.5:16' });
+  const bars = genBars(4000, { momentum: 0.2 });
+  lab.ingest({ bars });
+  const endT = bars[3999][0] / 1000;
+  // Every trade stays open until the very end: no result is known when any other is opened.
+  const trades = traderTrades(bars, 100).map((r) => [...r.slice(0, 4), endT, ...r.slice(5)]);
+  lab.ingest({ bars: [], trades });
+  assert.strictEqual(lab.snapshot().journal.evaluation, null);
+});
+
+test('trades near the start of the stored history do not break learning', () => {
+  const lab = new Lab({ auxSymbols: [], strategies: 'M15:1:1.5:16' });
+  const bars = genBars(1000);
+  const early = [['1:1', 1, (bars[255][0] + M15) / 1000, bars[255][4], (bars[260][0]) / 1000, bars[260][4], 10, 5]];
+  assert.doesNotThrow(() => lab.ingest({ bars, trades: early }));
+  assert.strictEqual(lab.journal.trades.get('1:1').x, undefined, 'not enough candles before it');
+});
