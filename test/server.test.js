@@ -56,3 +56,9 @@ test('static files cannot escape public dir', () => withServer(async (base) => {
   const r = await fetch(`${base}/..%2fpackage.json`);
   assert.notStrictEqual(r.status, 200);
 }));
+
+test('analyst answers only when configured', () => withServer(async (base) => {
+  const r = await fetch(`${base}/api/ask`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: 'Co teraz?' }) });
+  assert.strictEqual(r.status, 503);
+  assert.match((await r.json()).error, /ANTHROPIC_API_KEY/);
+}));

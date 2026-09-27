@@ -45,6 +45,11 @@
       </section>
 
       <section class="card">
+        <h2>Twój osobisty trener AI <span class="muted small">(uczy się z Twoich transakcji na złocie)</span></h2>
+        <div id="journal"></div>
+      </section>
+
+      <section class="card">
         <h2>Wyniki desku <span class="muted small">(tylko na danych, których AI wcześniej nie widziało; spread odjęty)</span></h2>
         <div id="ledger-tiles"></div>
         <div id="equity" class="chart" role="img"></div>
@@ -53,6 +58,23 @@
     </div>
 
     <div class="col">
+      <section class="card">
+        <h2>Analityk AI <span class="muted small">(Claude)</span></h2>
+        <div id="analyst">
+          <div id="analyst-log" class="chat" aria-live="polite"></div>
+          <div class="chips">
+            <button type="button" data-q="Dlaczego desk teraz czeka albo daje ten sygnał? Wyjaśnij prosto.">Dlaczego ta decyzja?</button>
+            <button type="button" data-q="Podsumuj sytuację na złocie i stan laboratorium strategii w kilku zdaniach.">Podsumuj rynek</button>
+            <button type="button" data-q="Oceń moje transakcje: co robię dobrze, co źle i co konkretnie poprawić?">Oceń moje transakcje</button>
+            <button type="button" data-q="Jak mam ocenić moją otwartą pozycję na podstawie danych desku?">Moja pozycja</button>
+          </div>
+          <form id="analyst-form" class="ask">
+            <input id="analyst-input" type="text" maxlength="1000" placeholder="Zapytaj o rynek, sygnał albo swoje transakcje…" autocomplete="off">
+            <button type="submit">Zapytaj</button>
+          </form>
+        </div>
+      </section>
+
       <section class="card">
         <h2>Laboratorium strategii</h2>
         <div id="lab"></div>
@@ -70,6 +92,8 @@
           <li><b>Laboratorium.</b> Z M15 budowane są świece H1 i H4. Sześć strategii (różne interwały i profile SL/TP) uczy się niezależnie. Każda ma trzy modele AI: sieć neuronową, drzewa gradientowe (GBDT, jak XGBoost) i regresję logistyczną, plus ich zespół.</li>
           <li><b>Uczciwy pomiar.</b> Każda prognoza jest oceniana, zanim model pozna wynik. Model uczy się dopiero potem, więc wszystkie statystyki pochodzą z danych, których AI nie widziało.</li>
           <li><b>Dowód przewagi.</b> Strategia najpierw handluje „na papierze”, czyli symuluje transakcje bez pieniędzy. Do desku trafia dopiero wtedy, gdy ostatnie 50–250 transakcji jest zyskowne z t-stat powyżej progu. Próg jest podniesiony, bo testujemy wiele strategii naraz, a to zwiększa szansę na przypadkowy „sukces”.</li>
+          <li><b>Reżimy rynku.</b> Każda transakcja papierowa jest zapisywana razem ze stanem rynku (trend wzrostowy, spadkowy albo konsolidacja; spokojnie albo nerwowo). Strategia, która w danym reżimie traci, jest w nim wyłączana.</li>
+          <li><b>Osobisty trener.</b> cBot przesyła Twoje transakcje na złocie. AI odtwarza rynek z chwili każdego wejścia i uczy się, w jakich warunkach Twoje decyzje wychodzą. Przy otwartej pozycji mówi, jak szło Ci w podobnych warunkach.</li>
           <li><b>Desk.</b> Wybiera najlepiej udowodnioną strategię z aktualnym sygnałem i odrzuca sprzeczne sygnały. Liczy wielkość pozycji z Twojego salda i ryzyka %. Blokuje sygnały przy szerokim spreadzie i po dziennym limicie straty.</li>
         </ol>
       </section>

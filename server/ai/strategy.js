@@ -34,6 +34,31 @@ const MODEL_LABELS = {
 };
 const TF_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440 };
 
+// Market regimes: direction of the trend (EMA20 vs EMA50 in ATR) × volatility
+// (ATR now vs its long average). A strategy that works in a calm uptrend can
+// lose money in a volatile range, so every paper trade is booked under the
+// regime it was opened in, and a strategy is switched off in regimes where it
+// has been losing.
+const REGIMES = ['up-calm', 'up-volatile', 'range-calm', 'range-volatile', 'down-calm', 'down-volatile'];
+const REGIME_LABELS = {
+  'up-calm': 'trend wzrostowy, spokojnie',
+  'up-volatile': 'trend wzrostowy, nerwowo',
+  'range-calm': 'konsolidacja, spokojnie',
+  'range-volatile': 'konsolidacja, nerwowo',
+  'down-calm': 'trend spadkowy, spokojnie',
+  'down-volatile': 'trend spadkowy, nerwowo',
+};
+const REGIME_MIN_TRADES = 20;
+const I_SPREAD = FEATURE_NAMES.indexOf('emaSpread');
+const I_VOL = FEATURE_NAMES.indexOf('volRegime');
+
+function regimeOf(x) {
+  const trend = x[I_SPREAD] > 1 ? 'up' : x[I_SPREAD] < -1 ? 'down' : 'range';
+  return `${trend}-${x[I_VOL] > 0.1 ? 'volatile' : 'calm'}`;
+}
+
+const emptyRegimes = () => Object.fromEntries(REGIMES.map((r) => [r, { n: 0, sumR: 0 }]));
+
 const DEFAULTS = {
   costUsd: 0.35, // spread + commission per ounce, in USD
   minEdge: 0.05, // required probability above break-even to suggest a trade
@@ -91,7 +116,14 @@ class Strategy extends EventEmitter {
       evals: { long: [], short: [] },
       paper: [], // R of recent paper trades
       paperTotal: { n: 0, sumR: 0 },
+      regimes: emptyRegimes(), // paper results per market regime
     };
+  }
+
+  // Has this strategy been losing in the given regime? (needs enough trades to say)
+  regimeRecord(regime) {
+    const r = this.stats.regimes[regime];
+    return { regime, label: REGIME_LABELS[regime], n: r.n, avgR: r.n ? r.sumR / r.n : null, ok: r.n < REGIME_MIN_TRADES || r.sumR >= 0 };
   }
 
   naive(dir) {
@@ -166,6 +198,8 @@ class Strategy extends EventEmitter {
     }
     this.scaler.update(f.x);
     const z = this.scaler.transform(f.x);
+    const regime = regimeOf(f.x);
+    const inRegime = this.regimeRecord(regime);
     const { slAtr, tpAtr } = this.spec;
     const { minEdge, minSamples, costUsd } = this.opts;
     const slDist = slAtr * f.atr;
@@ -201,12 +235,14 @@ class Strategy extends EventEmitter {
       why = paper.n < MIN_PAPER
         ? `sygnał ${word} tylko na papierze: zbiera wyniki (${paper.n}/${MIN_PAPER})`
         : `sygnał ${word} tylko na papierze: brak udowodnionej przewagi`;
+    } else if (!inRegime.ok) {
+      why = `sygnał ${word} odrzucony: w reżimie „${inRegime.label}” ta strategia traci (${inRegime.n} transakcji, średnio ${inRegime.avgR.toFixed(2)} R)`;
     } else {
       action = dir;
       why = `${MODEL_LABELS[c.name]} ocenia szansę na TP na ${Math.round(c.p * 100)}% (próg opłacalności ${Math.round(breakeven * 100)}%)`;
     }
 
-    const sample = { t: bar.t, entry: bar.c, slDist, tpDist, costR, z, preds, age: 0, long: null, short: null, trade: null, paper: null };
+    const sample = { t: bar.t, entry: bar.c, slDist, tpDist, costR, z, preds, regime, age: 0, long: null, short: null, trade: null, paper: null };
     if (candidate && !this.paperOpen) {
       sample.paper = dir;
       this.paperOpen = true;
@@ -235,6 +271,9 @@ class Strategy extends EventEmitter {
       p: c.p,
       breakeven,
       ev: ev(c.p),
+      regime,
+      regimeLabel: REGIME_LABELS[regime],
+      regimeRecord: inRegime,
       // Explanations cost ~30 model evaluations, so only for bars someone sees.
       reasons: ctx.live ? this.explain(dir, c.name, z) : [],
     };
@@ -290,6 +329,10 @@ class Strategy extends EventEmitter {
           if (this.stats.paper.length > PAPER_WINDOW) this.stats.paper.shift();
           this.stats.paperTotal.n++;
           this.stats.paperTotal.sumR += r;
+          if (s.regime) {
+            this.stats.regimes[s.regime].n++;
+            this.stats.regimes[s.regime].sumR += r;
+          }
           this.paperOpen = false;
         }
         if (s.trade === dir) {
@@ -361,6 +404,7 @@ class Strategy extends EventEmitter {
       models,
       gbdt: { trainedOn: this.learners.long.gbdt.trainedOn, fits: this.learners.long.gbdt.fits },
       paper: { ...paper, minN: MIN_PAPER, threshold: this.opts.minTstat, total: this.stats.paperTotal },
+      regimes: REGIMES.map((r) => this.regimeRecord(r)),
       hint: this.hint && { ...this.hint, barTime: new Date(this.hint.barTime).toISOString(), barEnd: new Date(this.hint.barEnd).toISOString() },
     };
   }
@@ -395,8 +439,9 @@ class Strategy extends EventEmitter {
     this.paperOpen = state.paperOpen;
     this.hint = state.hint;
     this.stats = state.stats;
+    this.stats.regimes = this.stats.regimes || emptyRegimes();
     return true;
   }
 }
 
-module.exports = { Strategy, strategyId, strategyLabel, MODEL_NAMES, MODEL_LABELS, TF_MINUTES };
+module.exports = { Strategy, strategyId, strategyLabel, regimeOf, MODEL_NAMES, MODEL_LABELS, TF_MINUTES, REGIMES, REGIME_LABELS };

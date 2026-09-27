@@ -249,6 +249,10 @@
       const tOk = p.tstat !== null && p.tstat >= p.threshold;
       const h = s.hint;
       const lastSig = h && h.action !== 'wait' ? `<span class="${h.action === 'long' ? 'buy' : 'sell'}">${ACTION[h.action]}</span> (${time(h.barTime)})` : '–';
+      const rr = h?.regimeRecord;
+      const regime = h?.regimeLabel
+        ? `${esc(h.regimeLabel)}${rr && rr.n ? ` <small>(${rr.n} trans., ${signed(rr.avgR)} R${rr.ok ? '' : ', <span class="neg">wyłączona</span>'})</small>` : ''}`
+        : '–';
       return `<li class="strat">
         <div class="strat-head"><b>${esc(s.label)}</b><span class="badge ${cls}">${label}</span></div>
         ${s.ready ? '' : `<div class="bar"><span style="width:${prog * 100}%"></span></div>`}
@@ -256,6 +260,7 @@
           <span>Wyniki nauki</span><b>${s.learned.toLocaleString('pl-PL')}${s.ready ? '' : ` / ${s.minSamples}`}</b>
           <span>Przewaga nad zgadywaniem</span><b>K ${skill('long')} · S ${skill('short')}</b>
           <span>Papier (${p.n} trans.)</span><b>${signed(p.avgR)} R, t-stat <span class="${tOk ? 'pos' : ''}">${fmt(p.tstat)}</span> / ${fmt(p.threshold)}</b>
+          <span>Reżim rynku teraz</span><b>${regime}</b>
           <span>Ostatni sygnał</span><b>${lastSig}</b>
         </div>
       </li>`;
@@ -283,6 +288,104 @@
     ].join('');
   }
 
+  function renderJournal(j) {
+    const box = $('journal');
+    const money = (v) => (typeof v === 'number' ? `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v))} ${esc(j.currency)}` : '–');
+    if (!j.n && !j.open.length) {
+      box.innerHTML = '<p class="empty">Brak Twoich transakcji na złocie. Trener zacznie się uczyć, gdy cBot prześle historię Twojego konta (cBot v2) albo gdy zamkniesz pierwsze pozycje.</p>';
+      return;
+    }
+    const parts = [];
+    for (const p of j.open) {
+      const pw = typeof p.pWin === 'number'
+        ? `W podobnych warunkach Twoje transakcje ${p.side === 'long' ? 'kupna' : 'sprzedaży'} kończyły się zyskiem w <b>${pct(p.pWin)}</b> przypadków.`
+        : `Model osobisty potrzebuje ${j.minTrades} transakcji, żeby oceniać (teraz ${j.learnable}).`;
+      parts.push(`<div class="coach ${p.side}">
+        <div><b class="${p.side === 'long' ? 'buy' : 'sell'}">${ACTION[p.side]}</b> ${fmt(p.lots, p.lots < 0.1 ? 3 : 2)} lota od ${fmt(p.entry)} · <span class="${p.profit >= 0 ? 'pos' : 'neg'}">${money(p.profit)}</span></div>
+        <div class="small">${pw} Desk AI: ${esc(p.desk)}${typeof p.deskP === 'number' ? `, szansa TP wg modelu ${pct(p.deskP)}` : ''}.${p.regime ? ` Rynek: ${esc(p.regime)}.` : ''}</div>
+        ${p.noStop ? '<div class="small neg">Pozycja bez stop lossa: jedna świeca może zabrać dużą część konta.</div>' : ''}
+      </div>`);
+    }
+    if (j.n) {
+      const tile = (label, value, cls = '') => `<div class="tile"><span>${label}</span><b class="${cls}">${value}</b></div>`;
+      parts.push(`<div class="tiles">
+        ${tile('Twoje transakcje', j.n)}
+        ${tile('Zyskowne', pct(j.winRate))}
+        ${tile('Wynik', money(j.totalProfit), j.totalProfit >= 0 ? 'pos' : 'neg')}
+        ${tile('Średni zysk / strata', `${money(j.avgWin)} / ${money(j.avgLoss)}`)}
+        ${tile('Profit factor', fmt(j.profitFactor))}
+      </div>`);
+      const e = j.evaluation;
+      if (!e) {
+        parts.push(`<p class="muted small">Model osobisty uczy się: ${j.learnable} z ${j.minTrades + 10} transakcji z danymi rynku potrzebnych do uczciwego testu.</p>`);
+      } else {
+        const better = e.skippedCount && -e.skippedProfit > 0;
+        parts.push(`<p class="small">Test na ${e.tested} Twoich transakcjach (każda oceniona modelem uczonym tylko na wcześniejszych): trener przewiduje Twoje wyniki <b class="${e.skill > 0 ? 'pos' : 'neg'}">${e.skill > 0 ? 'lepiej' : 'nie lepiej'}</b> niż przypadek (${signed(e.skill * 100, 1)}%).
+          ${e.skippedCount ? `Gdybyś pomijał transakcje ocenione poniżej 40% (${e.skippedCount}), Twój wynik byłby ${better ? 'lepszy' : 'gorszy'} o ${money(Math.abs(e.skippedProfit))}.` : ''}</p>`);
+      }
+      if (j.drivers.length) {
+        parts.push(`<div class="reasons"><div class="muted small">Co najbardziej decyduje o Twoich wynikach:</div><ul>${j.drivers
+          .map((d) => `<li><span class="${d.w > 0 ? 'pos' : 'neg'}">${d.w > 0 ? '▲ pomaga' : '▼ szkodzi'}</span> ${esc(d.label)}</li>`).join('')}</ul></div>`);
+      }
+      const ins = j.insights;
+      const seg = (g) => `<li><b>${esc(g.dim)}: ${esc(g.key)}</b> · ${g.n} trans., zyskowne ${pct(g.winRate)}, średnio ${money(g.avgProfit)}</li>`;
+      if (ins.best.length || ins.worst.length) {
+        parts.push(`<div class="insights">
+          ${ins.best.length ? `<div><div class="muted small">Tu zarabiasz:</div><ul class="pos-list">${ins.best.map(seg).join('')}</ul></div>` : ''}
+          ${ins.worst.length ? `<div><div class="muted small">Tu tracisz:</div><ul class="neg-list">${ins.worst.map(seg).join('')}</ul></div>` : ''}
+        </div>`);
+      }
+      parts.push(`<div class="table-wrap"><table>
+        <thead><tr><th>Otwarcie</th><th>Kierunek</th><th>Wejście</th><th>Wyjście</th><th>Wynik</th><th>Sesja</th></tr></thead>
+        <tbody>${j.last.map((t) => `<tr><td>${time(t.entryTime)}</td>
+          <td class="${t.side === 'long' ? 'buy' : 'sell'}">${ACTION[t.side]}</td><td>${fmt(t.entry)}</td><td>${fmt(t.close)}</td>
+          <td class="${t.profit >= 0 ? 'pos' : 'neg'}">${money(t.profit)}</td><td>${esc(t.session)}</td></tr>`).join('')}</tbody>
+      </table></div>`);
+    }
+    box.innerHTML = parts.join('');
+  }
+
+  // ---- AI analyst chat ----
+  const chat = [];
+  function addChat(role, text) {
+    const el = document.createElement('div');
+    el.className = `msg ${role}`;
+    el.textContent = text;
+    $('analyst-log').append(el);
+    el.scrollIntoView({ block: 'nearest' });
+    return el;
+  }
+  async function ask(question) {
+    if (state && !state.analyst) {
+      addChat('system', 'Analityk AI jest wyłączony. Dodaj do pliku .env linię ANTHROPIC_API_KEY=twój_klucz (klucz z console.anthropic.com) i uruchom ponownie start.bat.');
+      return;
+    }
+    addChat('user', question);
+    const pending = addChat('assistant', 'Analizuję…');
+    try {
+      const res = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, history: chat }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      pending.textContent = body.answer;
+      chat.push({ role: 'user', content: question }, { role: 'assistant', content: body.answer });
+    } catch (err) {
+      pending.className = 'msg system';
+      pending.textContent = err.message;
+    }
+  }
+  $('analyst-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const q = $('analyst-input').value.trim();
+    if (!q) return;
+    $('analyst-input').value = '';
+    ask(q);
+  });
+  for (const b of document.querySelectorAll('#analyst .chips button')) b.addEventListener('click', () => ask(b.dataset.q));
+
   function render() {
     if (!state) return;
     const lab = state.lab;
@@ -299,6 +402,7 @@
     renderLedger(lab);
     renderLab(lab);
     renderData(lab);
+    renderJournal(lab.journal);
   }
 
   function beep() {

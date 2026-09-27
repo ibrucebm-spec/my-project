@@ -8,6 +8,10 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+if not exist node_modules\@anthropic-ai\sdk (
+  echo Instaluję biblioteki ^(jednorazowo, potrzebny internet^)...
+  call npm install --omit=dev --no-audit --no-fund
+)
 node scripts\setup-env.js
 start "" http://localhost:3000
 node server\index.js

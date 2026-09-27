@@ -4,7 +4,9 @@
 //  - zamknięte świece XAUUSD (na start historię, potem każdą nową świecę),
 //  - zamknięte świece rynków powiązanych (domyślnie EURUSD, XAGUSD, USDJPY),
 //  - bieżącą cenę i spread złota,
-//  - saldo konta i parametry symbolu, żeby AI mogło policzyć wielkość pozycji.
+//  - saldo konta i parametry symbolu, żeby AI mogło policzyć wielkość pozycji,
+//  - Twoje zamknięte transakcje i otwarte pozycje na złocie, z których uczy
+//    się osobisty trener AI (kiedy Twoje decyzje wychodzą, a kiedy nie).
 // Serwer w odpowiedzi podaje, jakie świece już ma, więc po restarcie lub
 // wyczyszczeniu pamięci AI cBot sam dośle brakującą historię.
 //
@@ -60,6 +62,8 @@ namespace cAlgo.Robots
         private readonly List<Feed> _aux = new List<Feed>();
         private string _tf;
         private TimeSpan _span;
+        private DateTime _lastTradeClose = DateTime.MinValue; // newest of your closed trades the server has
+        private int _ticks;
 
         protected override void OnStart()
         {
@@ -95,10 +99,12 @@ namespace cAlgo.Robots
             }
 
             // Ask the server what it already has, then send only what is missing.
-            var hello = Post(Payload(null, null, ""));
+            var hello = Post(Payload(null, null, "", null));
             if (hello != null) Reconcile(hello);
             SyncAll();
+            SyncTrades();
             _gold.Bars.BarOpened += args => SyncAll(); // the previous bar has just closed
+            Positions.Closed += args => SyncTrades();   // learn from your trade right away
             Timer.Start(TimeSpan.FromSeconds(IntervalSec));
         }
 
@@ -108,9 +114,10 @@ namespace cAlgo.Robots
                 SyncAll(); // new bar or an earlier send failed
             else
             {
-                var resp = Post(Payload(null, null, ""));
+                var resp = Post(Payload(null, null, "", null));
                 if (resp != null) Reconcile(resp);
             }
+            if (++_ticks % 30 == 0) SyncTrades(); // fallback, e.g. after the server restarted
         }
 
         private Bars LoadBars(string symbol)
@@ -189,7 +196,7 @@ namespace cAlgo.Robots
             {
                 int end = Math.Min(last + 1, i + ChunkBars);
                 string rows = Rows(f, i, end);
-                string resp = Post(isAux ? Payload(f.Name, rows, "") : Payload(null, null, rows));
+                string resp = Post(isAux ? Payload(f.Name, rows, "", null) : Payload(null, null, rows, null));
                 if (resp == null) return false; // try again on the next timer tick
                 f.LastSent = f.Bars.OpenTimes[end - 1];
                 Reconcile(resp);
@@ -197,6 +204,64 @@ namespace cAlgo.Robots
                     Log(f.Name + ": wysłano " + (end - start) + " z " + total + " świec historii");
             }
             return true;
+        }
+
+        private static long UnixSec(DateTime t)
+        {
+            return new DateTimeOffset(DateTime.SpecifyKind(t, DateTimeKind.Utc)).ToUnixTimeSeconds();
+        }
+
+        // Your closed gold trades newer than what the server has, oldest first.
+        private void SyncTrades()
+        {
+            var list = new List<HistoricalTrade>();
+            foreach (HistoricalTrade h in History)
+                if (h.SymbolName == SymbolName && h.ClosingTime > _lastTradeClose) list.Add(h);
+            list.Sort((a, b) => a.ClosingTime.CompareTo(b.ClosingTime));
+            for (int i = 0; i < list.Count; i += 500)
+            {
+                var sb = new StringBuilder();
+                int end = Math.Min(list.Count, i + 500);
+                for (int k = i; k < end; k++)
+                {
+                    var h = list[k];
+                    if (k > i) sb.Append(',');
+                    sb.Append('[').Append(Str(h.PositionId + ":" + h.ClosingDealId))
+                      .Append(',').Append(h.TradeType == TradeType.Buy ? "1" : "-1")
+                      .Append(',').Append(UnixSec(h.EntryTime))
+                      .Append(',').Append(Num(h.EntryPrice))
+                      .Append(',').Append(UnixSec(h.ClosingTime))
+                      .Append(',').Append(Num(h.ClosingPrice))
+                      .Append(',').Append(Num(h.VolumeInUnits))
+                      .Append(',').Append(Num(h.NetProfit))
+                      .Append(']');
+                }
+                string resp = Post(Payload(null, null, "", sb.ToString()));
+                if (resp == null) return;
+                _lastTradeClose = list[end - 1].ClosingTime;
+                Reconcile(resp);
+                if (list.Count > 500) Log("wysłano " + end + " z " + list.Count + " Twoich transakcji");
+            }
+        }
+
+        private string PositionRows()
+        {
+            var sb = new StringBuilder();
+            foreach (var p in Positions)
+            {
+                if (p.SymbolName != SymbolName) continue;
+                if (sb.Length > 0) sb.Append(',');
+                sb.Append('[').Append(Str(p.Id.ToString(CultureInfo.InvariantCulture)))
+                  .Append(',').Append(p.TradeType == TradeType.Buy ? "1" : "-1")
+                  .Append(',').Append(UnixSec(p.EntryTime))
+                  .Append(',').Append(Num(p.EntryPrice))
+                  .Append(',').Append(Num(p.VolumeInUnits))
+                  .Append(',').Append(Num(p.StopLoss.HasValue ? p.StopLoss.Value : 0))
+                  .Append(',').Append(Num(p.TakeProfit.HasValue ? p.TakeProfit.Value : 0))
+                  .Append(',').Append(Num(p.NetProfit))
+                  .Append(']');
+            }
+            return sb.ToString();
         }
 
         private string Rows(Feed f, int from, int to)
@@ -231,7 +296,7 @@ namespace cAlgo.Robots
 
         // Every payload lists all related symbols (with bars only for the one
         // being sent), so the server reports what it has for each of them.
-        private string Payload(string auxName, string auxRows, string goldRows)
+        private string Payload(string auxName, string auxRows, string goldRows, string tradeRows)
         {
             var sb = new StringBuilder();
             sb.Append("{\"symbol\":").Append(Str(SymbolName));
@@ -253,7 +318,9 @@ namespace cAlgo.Robots
                 first = false;
                 sb.Append(Str(f.Name)).Append(":[").Append(f.Name == auxName ? auxRows : "").Append(']');
             }
-            sb.Append("},\"bars\":[").Append(goldRows ?? "").Append("]}");
+            sb.Append("},\"positions\":[").Append(PositionRows()).Append(']');
+            if (tradeRows != null) sb.Append(",\"trades\":[").Append(tradeRows).Append(']');
+            sb.Append(",\"bars\":[").Append(goldRows ?? "").Append("]}");
             return sb.ToString();
         }
 
@@ -272,6 +339,13 @@ namespace cAlgo.Robots
                 if (server < f.LastSent)
                     Log(f.Name + ": serwer nie ma części świec – wysyłam je ponownie");
                 f.LastSent = server;
+            }
+            var tm = Regex.Match(resp, "\"trades\":(\\d+|null)");
+            if (tm.Success)
+            {
+                _lastTradeClose = tm.Groups[1].Value == "null"
+                    ? DateTime.MinValue
+                    : DateTimeOffset.FromUnixTimeMilliseconds(long.Parse(tm.Groups[1].Value, CultureInfo.InvariantCulture)).UtcDateTime;
             }
         }
 

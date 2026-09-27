@@ -20,6 +20,7 @@ const { Strategy, TF_MINUTES } = require('./strategy');
 const { adjustedThreshold, tradeMetrics } = require('./stats');
 const { AUX_SLOTS } = require('./features');
 const { isGoldMarketOpen } = require('../market');
+const { Journal } = require('./journal');
 
 const LAB_VERSION = 3;
 const DAY_MS = 86_400_000;
@@ -153,6 +154,7 @@ class Lab extends EventEmitter {
     this.desk = { open: null, ledger: [], decision: null };
     this.live = { price: null, priceAt: 0, spread: null, spreadAt: 0, account: null, accountAt: 0 };
     this.spreads = []; // one sample per minute while the market is open, last 24 h
+    this.journal = new Journal(this);
   }
 
   // The real cost of trading: the median spread over the last day, compared
@@ -223,6 +225,11 @@ class Lab extends EventEmitter {
       last[name] = series.length ? series[series.length - 1].t : null;
     }
 
+    // The trader's own gold trades (closed) and open positions, for the coach.
+    let tradesAccepted = 0;
+    if (Array.isArray(body.trades)) tradesAccepted = this.journal.addTrades(body.trades);
+    if (Array.isArray(body.positions)) this.journal.setPositions(body.positions);
+
     const list = Array.isArray(body.bars) ? body.bars : [];
     const bars = list.map(parseBar).filter(Boolean).sort((x, y) => x.t - y.t);
     let accepted = 0;
@@ -232,12 +239,14 @@ class Lab extends EventEmitter {
       this.stepBase(bar);
       accepted++;
     }
-    if (accepted || auxAccepted) {
+    if (accepted || tradesAccepted) this.journal.refresh();
+    if (accepted || auxAccepted || tradesAccepted || this.journal.dirty) {
       this.version++;
       this.scheduleSave();
     }
     last[body.symbol || 'XAUUSD'] = this.lastBaseTime();
-    return { accepted, auxAccepted, ignored: bars.length - accepted, invalid: list.length - bars.length, last };
+    last.trades = this.journal.lastCloseTime();
+    return { accepted, auxAccepted, tradesAccepted, ignored: bars.length - accepted, invalid: list.length - bars.length, last };
   }
 
   addAux(sym, rows) {
@@ -436,6 +445,7 @@ class Lab extends EventEmitter {
       open: this.desk.open && { ...this.desk.open, t: new Date(this.desk.open.t).toISOString() },
       strategies: this.strategies.map((s) => s.snapshot()),
       learned: Math.max(0, ...this.strategies.map((s) => s.stats.learned)),
+      journal: this.journal.snapshot(),
       ledger: {
         ...m,
         wins: ledger.filter((t) => t.result === 'tp').length,
@@ -476,6 +486,7 @@ class Lab extends EventEmitter {
       fs.writeFileSync(`${file}.tmp`, JSON.stringify(data));
       fs.renameSync(`${file}.tmp`, file);
     };
+    this.journal.dirty = false;
     try {
       for (const s of this.strategies) write(this.strategyFile(s), s.toState());
       write(this.labFile(), {
@@ -485,6 +496,7 @@ class Lab extends EventEmitter {
         desk: this.desk,
         account: this.live.account,
         spreads: this.spreads,
+        journal: this.journal.toState(),
       });
     } catch (err) {
       console.error('[lab] nie udało się zapisać stanu:', err.message);
@@ -509,6 +521,7 @@ class Lab extends EventEmitter {
     this.desk = { open: null, ledger: [], decision: null, ...state.desk };
     this.live.account = state.account || null;
     this.spreads = state.spreads || [];
+    this.journal = new Journal(this, state.journal);
 
     const restored = new Set();
     for (const s of this.strategies) {

@@ -6,6 +6,7 @@ const config = require('./config');
 const { Lab } = require('./ai/lab');
 const { isGoldMarketOpen } = require('./market');
 const { createNotifier } = require('./notify');
+const { createAnalyst } = require('./analyst');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
@@ -20,12 +21,14 @@ function createApp(cfg = config) {
   const state = () => {
     const now = Date.now();
     const { price, priceAt } = lab.live;
+    // (state is also what the AI analyst reads)
     return {
       price,
       priceAt: priceAt ? new Date(priceAt).toISOString() : null,
       priceStale: !priceAt || now - priceAt > PRICE_STALE_MS,
       marketOpen: isGoldMarketOpen(),
       lab: lab.snapshot(),
+      analyst: analyst.enabled,
       at: new Date(now).toISOString(),
     };
   };
@@ -36,6 +39,8 @@ function createApp(cfg = config) {
     for (const res of clients) res.write(msg);
   };
   const notifier = createNotifier(cfg.telegram);
+  const analyst = createAnalyst(cfg.analyst);
+  let analystBusy = false;
   lab.on('signal', (decision) => {
     broadcast('signal', decision);
     notifier.send(notifier.signalText(decision));
@@ -113,6 +118,26 @@ function createApp(cfg = config) {
       }
     }
 
+    // AI analyst. Only from this computer: every question costs API credits.
+    if (url.pathname === '/api/ask' && req.method === 'POST') {
+      const ip = req.socket.remoteAddress || '';
+      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip)) return json(res, 403, { error: 'Analityk jest dostępny tylko na komputerze, na którym działa serwer.' });
+      if (!analyst.enabled) return json(res, 503, { error: 'Analityk AI jest wyłączony: dodaj ANTHROPIC_API_KEY do pliku .env (instrukcja w README).' });
+      if (analystBusy) return json(res, 429, { error: 'Analityk odpowiada na poprzednie pytanie, chwila.' });
+      try {
+        const body = JSON.parse(await readBody(req));
+        const question = String(body.question || '').trim().slice(0, 1000);
+        if (!question) return json(res, 400, { error: 'Puste pytanie.' });
+        analystBusy = true;
+        const answer = await analyst.ask(question, state(), Array.isArray(body.history) ? body.history : []);
+        return json(res, 200, { answer });
+      } catch (err) {
+        return json(res, 502, { error: err.message });
+      } finally {
+        analystBusy = false;
+      }
+    }
+
     // Static files
     const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     const file = path.normalize(path.join(PUBLIC_DIR, rel));
@@ -131,7 +156,7 @@ function createApp(cfg = config) {
     server.close();
   }
 
-  return { server, lab, notifier, close };
+  return { server, lab, notifier, analyst, close };
 }
 
 if (require.main === module) {
@@ -143,6 +168,7 @@ if (require.main === module) {
   const app = createApp();
   const s = app.lab.snapshot();
   console.log(`[lab] XAUUSD ${s.baseTf}: ${s.bars} świec, ${s.strategies.length} strategii, rynki powiązane: ${s.aux.map((a) => a.symbol).join(', ') || 'brak'}`);
+  console.log(app.analyst.enabled ? '[analityk] analityk AI (Claude) włączony' : '[analityk] analityk AI wyłączony (dodaj ANTHROPIC_API_KEY, instrukcja: README)');
   console.log(app.notifier.enabled ? '[telegram] powiadomienia na telefon włączone' : '[telegram] powiadomienia na telefon wyłączone (instrukcja: README)');
   console.log(`[lab] próg dowodu przewagi: t-stat ≥ ${s.threshold.tstat.toFixed(2)} (poprawka na ${s.threshold.strategies} testowanych strategii)`);
   // Save the learned state when the window is closed or Ctrl+C is pressed.
