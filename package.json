@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node server/index.js",
     "test": "node --test test/*.test.js",
-    "train": "node scripts/train-csv.js"
+    "train": "node scripts/train-csv.js",
+    "telegram": "node scripts/telegram-setup.js"
   },
   "license": "MIT"
 }

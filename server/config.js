@@ -25,6 +25,10 @@ module.exports = {
   // Local machine only by default; set HOST=0.0.0.0 to expose on the network.
   host: process.env.HOST || '127.0.0.1',
   ingestToken: process.env.INGEST_TOKEN || '',
+  telegram: {
+    token: process.env.TELEGRAM_BOT_TOKEN || '',
+    chatId: process.env.TELEGRAM_CHAT_ID || '',
+  },
   lab: {
     baseTf: timeframe,
     strategies: process.env.AI_STRATEGIES || undefined,

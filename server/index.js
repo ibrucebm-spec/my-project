@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const config = require('./config');
 const { Lab } = require('./ai/lab');
 const { isGoldMarketOpen } = require('./market');
+const { createNotifier } = require('./notify');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
@@ -34,7 +35,14 @@ function createApp(cfg = config) {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of clients) res.write(msg);
   };
-  lab.on('signal', (decision) => broadcast('signal', decision));
+  const notifier = createNotifier(cfg.telegram);
+  lab.on('signal', (decision) => {
+    broadcast('signal', decision);
+    notifier.send(notifier.signalText(decision));
+  });
+  lab.on('trade', (t) => {
+    if (t.live) notifier.send(notifier.tradeText(t));
+  });
 
   // Push state when something changed, and every 5 s regardless so the
   // "outdated data" markers stay current.
@@ -123,7 +131,7 @@ function createApp(cfg = config) {
     server.close();
   }
 
-  return { server, lab, close };
+  return { server, lab, notifier, close };
 }
 
 if (require.main === module) {
@@ -135,6 +143,7 @@ if (require.main === module) {
   const app = createApp();
   const s = app.lab.snapshot();
   console.log(`[lab] XAUUSD ${s.baseTf}: ${s.bars} świec, ${s.strategies.length} strategii, rynki powiązane: ${s.aux.map((a) => a.symbol).join(', ') || 'brak'}`);
+  console.log(app.notifier.enabled ? '[telegram] powiadomienia na telefon włączone' : '[telegram] powiadomienia na telefon wyłączone (instrukcja: README)');
   console.log(`[lab] próg dowodu przewagi: t-stat ≥ ${s.threshold.tstat.toFixed(2)} (poprawka na ${s.threshold.strategies} testowanych strategii)`);
   // Save the learned state when the window is closed or Ctrl+C is pressed.
   const shutdown = () => {

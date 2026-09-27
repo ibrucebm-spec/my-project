@@ -19,6 +19,7 @@ const path = require('path');
 const { Strategy, TF_MINUTES } = require('./strategy');
 const { adjustedThreshold, tradeMetrics } = require('./stats');
 const { AUX_SLOTS } = require('./features');
+const { isGoldMarketOpen } = require('../market');
 
 const LAB_VERSION = 3;
 const DAY_MS = 86_400_000;
@@ -151,6 +152,23 @@ class Lab extends EventEmitter {
     }
     this.desk = { open: null, ledger: [], decision: null };
     this.live = { price: null, priceAt: 0, spread: null, spreadAt: 0, account: null, accountAt: 0 };
+    this.spreads = []; // one sample per minute while the market is open, last 24 h
+  }
+
+  // The real cost of trading: the median spread over the last day, compared
+  // with the cost the strategies assume (AI_COST_USD).
+  sampleSpread(spread, now) {
+    const last = this.spreads[this.spreads.length - 1];
+    if (last && now - last[0] < 60_000) return;
+    if (!isGoldMarketOpen(new Date(now))) return;
+    this.spreads.push([now, spread]);
+    while (this.spreads.length && now - this.spreads[0][0] > DAY_MS) this.spreads.shift();
+  }
+
+  spreadMedian() {
+    if (this.spreads.length < 30) return null;
+    const v = this.spreads.map((x) => x[1]).sort((a, b) => a - b);
+    return v[Math.floor(v.length / 2)];
   }
 
   auxCtx() {
@@ -180,6 +198,7 @@ class Lab extends EventEmitter {
     if (typeof body.spread === 'number' && body.spread >= 0) {
       this.live.spread = body.spread;
       this.live.spreadAt = now;
+      this.sampleSpread(body.spread, now);
     }
     const a = body.account;
     if (a && [a.balance, a.valuePerUnit, a.lotSize].every((v) => typeof v === 'number' && v > 0)) {
@@ -338,7 +357,10 @@ class Lab extends EventEmitter {
         decision.action = 'wait';
         decision.why = `sygnał ${ACTION_WORD[h.action]} zablokowany przez zarządzanie ryzykiem`;
       } else if (!this.desk.open && primary.commitTrade()) {
-        this.desk.open = { strategy: primary.id, label: primary.label, t: h.barTime, side: h.action, entry: h.entry, sl: decision.sl, tp: decision.tp };
+        this.desk.open = {
+          strategy: primary.id, label: primary.label, t: h.barTime, side: h.action, entry: h.entry, sl: decision.sl, tp: decision.tp,
+          live: Date.now() - bar.end < 2 * this.baseMs, // false = found while learning on history
+        };
         decision.committed = true;
       }
     }
@@ -351,19 +373,30 @@ class Lab extends EventEmitter {
   }
 
   onDeskTrade(t, s) {
-    this.desk.ledger.push({ ...t, label: s.label });
+    const open = this.desk.open && this.desk.open.strategy === t.strategy && this.desk.open.t === t.t ? this.desk.open : null;
+    const trade = { ...t, label: s.label, live: !!open?.live };
+    this.desk.ledger.push(trade);
     if (this.desk.ledger.length > LEDGER_MAX) this.desk.ledger.shift();
-    if (this.desk.open && this.desk.open.strategy === t.strategy && this.desk.open.t === t.t) this.desk.open = null;
-    this.emit('trade', t);
+    if (open) this.desk.open = null;
+    this.emit('trade', trade);
   }
 
   snapshotDecision() {
     const d = this.desk.decision;
     if (!d) return null;
+    const now = Date.now();
+    // How far the price has moved since the signal, in R. Chasing a move that
+    // already happened changes the trade's odds, so the page warns about it.
+    let drift = null;
+    if (d.action !== 'wait' && this.live.price && now - this.live.priceAt < 60_000) {
+      drift = ((d.action === 'long' ? 1 : -1) * (this.live.price - d.entry)) / d.slDist;
+    }
     return {
       ...d,
       barTime: new Date(d.barTime).toISOString(),
       validUntil: new Date(d.validUntil).toISOString(),
+      expired: now > d.validUntil,
+      drift,
       sizing: d.slDist ? this.sizing(d.slDist) : null,
     };
   }
@@ -371,6 +404,8 @@ class Lab extends EventEmitter {
   snapshot() {
     const ledger = this.desk.ledger;
     const m = tradeMetrics(ledger.map((t) => t.r));
+    const liveTrades = ledger.filter((t) => t.live);
+    const lm = tradeMetrics(liveTrades.map((t) => t.r));
     let eq = 0;
     const equity = ledger.map((t) => (eq += t.r));
     const step = Math.max(1, Math.ceil(equity.length / 400));
@@ -388,6 +423,8 @@ class Lab extends EventEmitter {
       live: {
         spread: this.live.spread,
         spreadAt: this.live.spreadAt ? new Date(this.live.spreadAt).toISOString() : null,
+        spreadMedian: this.spreadMedian(),
+        spreadSamples: this.spreads.length,
         account: this.live.account && { balance: this.live.account.balance, currency: this.live.account.currency },
       },
       params: {
@@ -405,6 +442,7 @@ class Lab extends EventEmitter {
         losses: ledger.filter((t) => t.result === 'sl').length,
         timeouts: ledger.filter((t) => t.result === 'time').length,
         equity: equity.filter((_, i) => i % step === 0 || i === equity.length - 1),
+        live: { ...lm, wins: liveTrades.filter((t) => t.result === 'tp').length },
         last: ledger.slice(-15).reverse().map((t) => ({ ...t, t: new Date(t.t).toISOString(), closedAt: new Date(t.closedAt).toISOString() })),
       },
     };
@@ -446,6 +484,7 @@ class Lab extends EventEmitter {
         aux: Object.fromEntries([...this.aux].map(([k, v]) => [k, packBars(v)])),
         desk: this.desk,
         account: this.live.account,
+        spreads: this.spreads,
       });
     } catch (err) {
       console.error('[lab] nie udało się zapisać stanu:', err.message);
@@ -469,6 +508,7 @@ class Lab extends EventEmitter {
     for (const [k, rows] of Object.entries(state.aux || {})) if (this.aux.has(k)) this.aux.set(k, unpackBars(rows));
     this.desk = { open: null, ledger: [], decision: null, ...state.desk };
     this.live.account = state.account || null;
+    this.spreads = state.spreads || [];
 
     const restored = new Set();
     for (const s of this.strategies) {

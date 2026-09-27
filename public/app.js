@@ -97,6 +97,11 @@
         <div><span>Wielkość pozycji</span>${size}</div>
         <div><span>Oczekiwany wynik</span><b>${signed(d.ev)} R</b><small>RR 1:${fmt(d.rr, 1)}</small></div>
       </div>`);
+      if (d.expired) {
+        parts.push('<div class="guard"><b>Podpowiedź wygasła.</b> Minęła więcej niż jedna świeca od sygnału; nie wchodź już po tej cenie.</div>');
+      } else if (typeof d.drift === 'number' && Math.abs(d.drift) >= 0.3) {
+        parts.push(`<div class="guard"><b>Cena odjechała o ${signed(d.drift, 1)} R od wejścia.</b> ${d.drift > 0 ? 'Ruch już się odbył; wejście teraz ma gorszy stosunek zysku do ryzyka.' : 'Cena idzie przeciw sygnałowi; wejście teraz jest bliżej stop lossa.'} Rozważ pominięcie.</div>`);
+      }
       parts.push(`<div class="probs">${probRow('Szansa na TP', d.p, d.breakeven)}
         <div class="muted small">Pionowa kreska to próg opłacalności (${pct(d.breakeven)}) po uwzględnieniu spreadu. Podpowiedź ważna do ${time(d.validUntil)}, potem cena odjedzie od wejścia.</div></div>`);
       parts.push(`<div class="meta">Strategia: <b>${esc(d.strategyLabel)}</b> · model: ${esc(d.model)} · papier: ${d.paper.n} transakcji, ${signed(d.paper.avgR)} R, t-stat ${fmt(d.paper.tstat)}</div>`);
@@ -134,12 +139,15 @@
       ${tile('Razem', `${signed(l.totalR, 1)} R`, l.totalR >= 0 ? 'pos' : 'neg')}
       ${tile('Profit factor', pf)}
       ${tile('Max obsunięcie', `${fmt(l.maxDrawdownR, 1)} R`)}
-    </div>`;
+    </div>
+    <p class="muted small">${l.live.n
+      ? `<b>Na żywo:</b> ${l.live.n} transakcji, TP ${pct(l.live.wins / l.live.n)}, średnio ${signed(l.live.avgR)} R, razem ${signed(l.live.totalR, 1)} R. Pozostałe ${l.n - l.live.n} to symulacja na historii (też na danych, których AI nie widziało).`
+      : `Wszystkie ${l.n} transakcji to symulacja na historii (na danych, których AI nie widziało). Wyniki na żywo pojawią się tu osobno.`}</p>`;
     renderEquity(l.equity, l.n);
     $('ledger-table').innerHTML = `<div class="table-wrap"><table>
       <thead><tr><th>Wejście</th><th>Strategia</th><th>Kierunek</th><th>Cena</th><th>Wynik</th><th>R</th></tr></thead>
       <tbody>${l.last.map((x) => `<tr>
-        <td>${time(x.t)}</td><td>${esc(x.label.split(' · ')[0])}</td>
+        <td>${time(x.t)}${x.live ? ' <span class="badge st-proven">na żywo</span>' : ''}</td><td>${esc(x.label.split(' · ')[0])}</td>
         <td class="${x.side === 'long' ? 'buy' : 'sell'}">${ACTION[x.side]}</td>
         <td>${fmt(x.entry)}</td><td>${RESULT[x.result]}</td>
         <td class="${x.r >= 0 ? 'pos' : 'neg'}">${signed(x.r)} R</td></tr>`).join('')}</tbody>
@@ -267,6 +275,10 @@
       kv('Saldo konta', acc ? `${fmt(acc.balance)} ${esc(acc.currency)}` : 'brak (stary cBot?)'),
       kv('Ryzyko na transakcję', `${fmt(lab.params.riskPct, 1)}% salda`),
       kv('Zakładany spread', `${fmt(lab.params.costUsd)} $ (blokada powyżej ${fmt(lab.params.costUsd * lab.params.maxSpreadMult)} $)`),
+      kv('Zmierzony spread (mediana 24 h)', lab.live.spreadMedian === null ? `zbieram dane (${lab.live.spreadSamples}/30 min)` : `${fmt(lab.live.spreadMedian)} $`),
+      lab.live.spreadMedian !== null && lab.live.spreadMedian > lab.params.costUsd * 1.15
+        ? `<div class="guard">Twój broker ma wyższy spread (${fmt(lab.live.spreadMedian)} $) niż zakłada AI (${fmt(lab.params.costUsd)} $), więc wyniki są zbyt optymistyczne. Wpisz w pliku .env <b>AI_COST_USD=${lab.live.spreadMedian.toFixed(2)}</b> i uruchom ponownie start.bat. AI przeliczy wszystko na zapisanej historii.</div>`
+        : '',
       kv('Dzienny limit straty', `${lab.params.dailyLossR} R`),
     ].join('');
   }
